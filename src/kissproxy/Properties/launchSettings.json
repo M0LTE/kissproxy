@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "kissproxy": {
+      "commandName": "Project",
+      "commandLineArgs": "",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      },
+      "dotnetRunMessages": true
+    }
+  }
+}

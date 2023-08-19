@@ -151,7 +151,7 @@ sudo systemctl start kissproxy
 
 ### Multi-port
 
-If you want to run more than one port, don't specify any command line parameters. Instead, place `/etc/kissproxy.conf` like this:
+If you want to run more than one TNC, don't specify any command line parameters. Instead, place `/etc/kissproxy.conf` like this:
 
 ```
 [

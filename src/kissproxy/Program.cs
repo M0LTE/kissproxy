@@ -3,6 +3,7 @@ using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Protocol;
+using NAx25;
 using System.CommandLine;
 using System.IO.Ports;
 using System.Net;
@@ -10,6 +11,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using static kissproxy.KissHelpers;
 using static NAx25.KissFraming;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
 comPortOption.AddAlias("-c");
@@ -273,6 +275,8 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
         return;
     }
 
+    var instance = LastDelimitation(comPort);
+
     topic ??= $"kissproxy/{LastDelimitation(Environment.MachineName)}/{LastDelimitation(comPort)}/{(toModem ? "to" : "from")}Modem";
 
     await EnqueueBytes(client, $"{topic}/framed", buffer, convertToBase64);
@@ -280,11 +284,49 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
     {
         var (rawFrame, portId, commandCode) = Unkiss(buffer);
         await EnqueueBytes(client, $"{topic}/unframed/port{portId}/{commandCode}KissCmd", rawFrame, convertToBase64);
+
+        try
+        {
+            if (commandCode == KissCommandCode.DataFrame && Frame.TryParse(rawFrame, out var frame))
+            {
+                await EnqueueString(client, $"{topic}/unframed/port{portId}/{KissCommandCode.DataFrame}", frame.ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            var test = @$"
+[Fact]
+public void DecodeException_{Guid.NewGuid()}()
+{{
+    // {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}
+    // {ex.GetType().Name}: {ex.Message}
+    Frame.TryParse(Convert.FromHexString(""{Convert.ToHexString(rawFrame)}""), out var frame).Should().BeTrue();
+}}";
+
+            File.AppendAllText("GeneratedUnitTests.txt", test);
+
+            LogInformation(instance, "Error decoding a frame, generated a test");
+        }
     }
     catch (Exception ex)
     {
-        LogInformation("", $"Problem unframing KISS frame: {ex.Message}");
+        LogInformation(instance, $"Problem decoding frame: {ex.Message}");
     }
+}
+
+static async Task EnqueueString(IManagedMqttClient client, string topic, string? payload)
+{
+    if (payload == null)
+    {
+        return;
+    }
+
+    var messageBuilder = new MqttApplicationMessageBuilder()
+        .WithTopic(topic)
+        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.ExactlyOnce)
+        .WithPayload(payload);
+
+    await client.EnqueueAsync(messageBuilder.Build());
 }
 
 static async Task EnqueueBytes(IManagedMqttClient client, string topic, IList<byte> bytes, bool convertToBase64)

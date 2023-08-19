@@ -14,16 +14,3 @@ internal static class KissHelpers
         }
     }
 }
-
-public enum KissCommandCode : byte
-{
-    DataFrame = 0x00,
-    TxDelay = 0x01,
-    Persistence = 0x02,
-    SlotTime = 0x03,
-    TxTail = 0x04,
-    FullDuplex = 0x05,
-    SetHardware = 0x06,
-    AckMode = 0x0c,
-    ExitKissMode = 0xff
-}

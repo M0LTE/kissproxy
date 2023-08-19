@@ -138,6 +138,34 @@ This causes BPQ to connect to the modem via this program, rather than directly.
 
 Start up LinBPQ and check syslog to ensure kissproxy reports it has received a node connection, has connected to the modem, and has connected to your MQTT server.
 
+### Upgrade
+
+```
+cd kissproxy
+git pull
+dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/kissproxy/Properties/PublishProfiles/Linux-arm32.pubxml
+sudo systemctl stop kissproxy
+sudo mv publish/* /opt/kissproxy/
+sudo systemctl start kissproxy
+```
+
+### Multi-port
+
+If you want to run more than one port, don't specify any command line parameters. Instead, place `/etc/kissproxy.conf` like this:
+
+```
+[
+  {
+      "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0",
+      "mqttServer": "mqtt"
+  }, {
+      "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.3:1.0",
+      "tcpPort": 8911,
+      "mqttServer": "mqtt"
+  }
+]
+```
+
 ## Licence
 
 MIT. Fill your boots.

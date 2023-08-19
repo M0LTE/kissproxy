@@ -1,4 +1,5 @@
-﻿using MQTTnet;
+﻿using kissproxy;
+using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Protocol;
@@ -6,12 +7,10 @@ using System.CommandLine;
 using System.IO.Ports;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 using static kissproxy.KissHelpers;
 
-var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0")
-{
-    IsRequired = true,
-};
+var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
 comPortOption.AddAlias("-c");
 
 var baudOption = new Option<int>("--baud", "The baud rate of the modem");
@@ -53,48 +52,71 @@ rootCommand.AddOption(brokerPasswordOption);
 rootCommand.AddOption(brokerTopicOption);
 rootCommand.AddOption(publishBase64Option);
 
-/*rootCommand.SetHandler(
-    (comport, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64) 
-        => Run(comport!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64),
-    comPortOption,
-    baudOption,
-    tcpPortOption,
-    anyHostOption,
-    brokerOption, 
-    brokerUserOption,
-    brokerPasswordOption,
-    brokerTopicOption,
-    publishBase64Option);*/
+rootCommand.SetHandler(async context =>
+{
+    string configFile = "/etc/kissproxy.conf";
 
-rootCommand.SetHandler(async context => { 
+    if (!File.Exists(configFile))
+    {
+        configFile = "kissproxy.conf";
+    }
 
-    var comPort = context.ParseResult.GetValueForOption(comPortOption);
-    var baud = context.ParseResult.GetValueForOption(baudOption);
-    var tcpPort = context.ParseResult.GetValueForOption(tcpPortOption);
-    var anyHost = context.ParseResult.GetValueForOption(anyHostOption);
-    var mqttServer = context.ParseResult.GetValueForOption(brokerOption);
-    var mqttUser = context.ParseResult.GetValueForOption(brokerUserOption);
-    var mqttPassword = context.ParseResult.GetValueForOption(brokerPasswordOption);
-    var mqttTopic = context.ParseResult.GetValueForOption(brokerTopicOption);
-    var base64 = context.ParseResult.GetValueForOption(publishBase64Option);
+    if (File.Exists(configFile))
+    {
+        LogInformation("", $"Using {configFile} and ignoring any command line parameters");
 
-    using var sp = new SerialPort(comPort!, baud);
+        var file = File.ReadAllText(configFile);
+        var config = JsonSerializer.Deserialize<Config[]>(file, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        List<Task> tasks = new();
+        foreach (var instance in config!)
+        {
+            var t = Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopic, instance.Base64);
+            tasks.Add(t);
+        }
+        await Task.WhenAll(tasks);
+        Thread.CurrentThread.Join();
+    }
+    else
+    {
+        var comPort = context.ParseResult.GetValueForOption(comPortOption);
+        var baud = context.ParseResult.GetValueForOption(baudOption);
+        var tcpPort = context.ParseResult.GetValueForOption(tcpPortOption);
+        var anyHost = context.ParseResult.GetValueForOption(anyHostOption);
+        var mqttServer = context.ParseResult.GetValueForOption(brokerOption);
+        var mqttUser = context.ParseResult.GetValueForOption(brokerUserOption);
+        var mqttPassword = context.ParseResult.GetValueForOption(brokerPasswordOption);
+        var mqttTopic = context.ParseResult.GetValueForOption(brokerTopicOption);
+        var base64 = context.ParseResult.GetValueForOption(publishBase64Option);
+
+        await Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
+    }
+});
+
+return rootCommand.Invoke(args);
+
+static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, string? mqttServer, string? mqttUser, string? mqttPassword, string? mqttTopic, bool base64)
+{
+    var instance = LastDelimitation(comPort);
+
+    using var sp = new SerialPort(comPort, baud);
     try
     {
         sp.Open();
     }
     catch (Exception ex)
     {
-        Exit($"Could not connect to {comPort}: {ex.Message}, terminating");
+        LogInformation(instance, $"Could not connect to {comPort}: {ex.Message}");
         return;
     }
 
-    LogInformation($"Connected to modem on {comPort} at {baud}");
+    LogInformation(instance, $"Connected to modem on {comPort} at {baud}");
 
     Action<List<byte>>? tcpSend = null, serialSend = buffer => sp.Write(buffer.ToArray(), 0, buffer.Count);
     IManagedMqttClient? mqttClient = null;
 
-    _ = Task.Run(async () =>
+    List<Task> tasks = new();
+
+    tasks.Add(Task.Run(async () =>
     {
         try
         {
@@ -108,13 +130,13 @@ rootCommand.SetHandler(async context => {
                 }
                 catch (OperationCanceledException)
                 {
-                    Exit("Modem has disconnected, terminating");
+                    LogInformation(instance, "Modem has disconnected");
                     return;
                 }
 
                 if (read == -1)
                 {
-                    Exit("Modem returned -1, terminating");
+                    LogInformation(instance, "Modem returned -1");
                     return;
                 }
 
@@ -127,9 +149,9 @@ rootCommand.SetHandler(async context => {
             Exit($"Exception: {ex.Message}, terminating");
             return;
         }
-    });
+    }));
 
-    _ = Task.Run(async () =>
+    tasks.Add(Task.Run(async () =>
     {
         try
         {
@@ -137,12 +159,12 @@ rootCommand.SetHandler(async context => {
             {
                 TcpListener tcpListener = new(anyHost ? IPAddress.Any : IPAddress.Loopback, tcpPort);
                 tcpListener.Start();
-                LogInformation($"Awaiting node connection on port {tcpPort}");
+                LogInformation(instance, $"Awaiting node connection on port {tcpPort}");
 
                 using var tcpClient = tcpListener.AcceptTcpClient();
                 using var tcpStream = tcpClient.GetStream();
                 tcpSend = buffer => tcpStream.Write(buffer.ToArray(), 0, buffer.Count);
-                LogInformation("Accepted TCP node connection");
+                LogInformation(instance, "Accepted TCP node connection");
 
                 List<byte> tcpBuffer = new();
                 while (true)
@@ -150,12 +172,12 @@ rootCommand.SetHandler(async context => {
                     var read = tcpStream.ReadByte();
                     if (read == -1)
                     {
-                        LogInformation("Node disconnected");
+                        LogInformation(instance, "Node disconnected");
                         tcpSend = null;
                         break;
                     }
                     tcpBuffer.Add((byte)read);
-                    await ProcessBuffer(tcpBuffer, serialSend, true, mqttClient, comPort!, mqttTopic, base64);
+                    await ProcessBuffer(tcpBuffer, serialSend, true, mqttClient, comPort, mqttTopic, base64);
                 }
             }
         }
@@ -164,18 +186,18 @@ rootCommand.SetHandler(async context => {
             Exit($"Exception: {ex.Message}, terminating");
             return;
         }
-    });
+    }));
 
     if (!string.IsNullOrWhiteSpace(mqttServer))
     {
         var (server, port) = SplitMqttServer(mqttServer);
 
-        LogInformation($"Connecting to MQTT broker {server}:{port}...");
+        LogInformation(instance, $"Connecting to MQTT broker {server}:{port}...");
 
         var options = new ManagedMqttClientOptionsBuilder()
             .WithAutoReconnectDelay(TimeSpan.FromSeconds(5))
             .WithClientOptions(new MqttClientOptionsBuilder()
-                .WithClientId("kissproxy")
+                .WithClientId("kissproxy_" + instance)
                 .WithTcpServer(server, port)
                 .WithCredentials(mqttUser, mqttPassword)
                 //.WithTls() //TODO
@@ -190,26 +212,24 @@ rootCommand.SetHandler(async context => {
         mqttClient.DisconnectedAsync += MqttClient_DisconnectedAsync;
     }
 
-    Thread.CurrentThread.Join();
-});
-
-return rootCommand.Invoke(args);
+    await Task.WhenAll(tasks);
+}
 
 static Task MqttClient_DisconnectedAsync(MqttClientDisconnectedEventArgs arg)
 {
-    LogInformation("Disconnected from MQTT broker: " + arg?.ReasonString);
+    LogInformation("", "Disconnected from MQTT broker: " + arg?.ReasonString);
     return Task.CompletedTask;
 }
 
 static Task MqttClient_ConnectingFailedAsync(ConnectingFailedEventArgs arg)
 {
-    LogInformation("Failed to connect to MQTT broker: " + arg?.Exception?.Message);
+    LogInformation("", "Failed to connect to MQTT broker: " + arg?.Exception?.Message);
     return Task.CompletedTask;
 }
 
 static Task MqttClient_ConnectedAsync(MqttClientConnectedEventArgs arg)
 {
-    LogInformation("Connected to MQTT broker");
+    LogInformation("", "Connected to MQTT broker");
     return Task.CompletedTask;
 }
 
@@ -233,7 +253,7 @@ static async Task ProcessBuffer(List<byte> buffer, Action<List<byte>>? send, boo
 
         if (send == null)
         {
-            LogInformation("Nowhere to send a frame, discarded.");
+            LogInformation(LastDelimitation(comPort), "Nowhere to send a frame, discarded.");
         }
         else
         {
@@ -252,7 +272,7 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
         return;
     }
 
-    topic ??= $"kissproxy/{Sanitise(Environment.MachineName)}/{Sanitise(comPort)}/{(toModem ? "to" : "from")}Modem";
+    topic ??= $"kissproxy/{LastDelimitation(Environment.MachineName)}/{LastDelimitation(comPort)}/{(toModem ? "to" : "from")}Modem";
 
     await EnqueueBytes(client, $"{topic}/framed", buffer, convertToBase64);
     try
@@ -262,7 +282,7 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
     }
     catch (Exception ex)
     {
-        LogInformation($"Problem unframing KISS frame: {ex.Message}");
+        LogInformation("", $"Problem unframing KISS frame: {ex.Message}");
     }
 }
 
@@ -279,19 +299,19 @@ static async Task EnqueueBytes(IManagedMqttClient client, string topic, IList<by
     await client.EnqueueAsync(messageBuilder.Build());
 }
 
-static string Sanitise(string comPort)
+static string LastDelimitation(string comPort)
 {
     var parts = comPort.Split('/');
     return parts.Last();
 }
 
-static void LogInformation(string message)
+static void LogInformation(string instance, string message)
 {
-    Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {message}");
+    Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");
 }
 
 static void Exit(string v)
 {
-    LogInformation(v);
+    LogInformation("", v);
     Environment.Exit(1);
 }

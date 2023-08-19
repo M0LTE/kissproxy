@@ -2,6 +2,8 @@
 
 Serial-to-TCP proxy for serial KISS modems, including MQTT tracing support. That is, a program which connects to a serial KISS modem, makes it available on a TCP port so it can continue to be used as normal by node software, and also outputs all the traffic between the node software and the modem to an MQTT host of your choosing, with various options.
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y8KFHA0)
+
 ## Usage
 
 ```

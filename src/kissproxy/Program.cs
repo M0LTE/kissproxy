@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using static kissproxy.KissHelpers;
+using static NAx25.KissFraming;
 
 var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
 comPortOption.AddAlias("-c");

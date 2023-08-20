@@ -1,4 +1,5 @@
 ﻿using kissproxy;
+using MoreLinq;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
@@ -172,10 +173,21 @@ static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, strin
                 List<byte> tcpBuffer = new();
                 while (true)
                 {
-                    var read = tcpStream.ReadByte();
-                    if (read == -1)
+                    int read;
+                    try
+                    {
+                        read = tcpStream.ReadByte();
+                    }
+                    catch (IOException)
                     {
                         LogInformation(instance, "Node disconnected");
+                        tcpSend = null;
+                        break;
+                    }
+
+                    if (read == -1)
+                    {
+                        LogInformation(instance, "Node disconnected (-1)");
                         tcpSend = null;
                         break;
                     }
@@ -248,7 +260,19 @@ static (string server, int port) SplitMqttServer(string mqttServer)
 
 static async Task ProcessBuffer(List<byte> buffer, Action<List<byte>>? send, bool toModem, IManagedMqttClient? client, string comPort, string? topic, bool convertToBase64)
 {
+    if (buffer.Count < 2 || buffer.All(b => b == FEND) || buffer.Last() != FEND)
+    {
+        return;
+    }
+
     DiscardRepeatedFends(buffer);
+
+    // suspect a bug in here somewhere
+    // not catching some outbound frames
+    // e.g. connect to g7bcs, type info
+    // we don't get the info command
+
+    // try moving the 2m modem to the PC and pointing BPQ on the Pi at it
 
     if (IsKissFrame(buffer))
     {
@@ -290,17 +314,19 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
             if (commandCode == KissCommandCode.DataFrame && Frame.TryParse(rawFrame, out var frame))
             {
                 await EnqueueString(client, $"{topic}/unframed/port{portId}/{KissCommandCode.DataFrame}", frame.ToString());
+                LogInformation(instance, frame.ToString());
             }
         }
         catch (Exception ex)
         {
             var test = @$"
 [Fact]
-public void DecodeException_{Guid.NewGuid()}()
+public void DecodeException_{Guid.NewGuid().ToString().Replace("-", "")}()
 {{
     // {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}
     // {ex.GetType().Name}: {ex.Message}
-    Frame.TryParse(Convert.FromHexString(""{Convert.ToHexString(rawFrame)}""), out var frame).Should().BeTrue();
+    Frame.TryParse(Convert.FromHexString(""{Convert.ToHexString(rawFrame).ToLower()}""), out var frame).Should().BeTrue();
+    frame.ToString();
 }}";
 
             File.AppendAllText("GeneratedUnitTests.txt", test);

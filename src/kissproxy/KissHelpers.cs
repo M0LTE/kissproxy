@@ -2,7 +2,7 @@
 
 internal static class KissHelpers
 {
-    private const byte FEND = 0xc0;
+    public const byte FEND = 0xc0;
 
     public static bool IsKissFrame(List<byte> buffer) => buffer.Count > 2 && buffer[0] == FEND && buffer[^1] == FEND;
 

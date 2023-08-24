@@ -124,6 +124,7 @@ static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, strin
     {
         try
         {
+            int seq = 0;
             List<byte> serialBuffer = new();
             while (true)
             {
@@ -145,6 +146,7 @@ static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, strin
                 }
 
                 serialBuffer.Add((byte)read);
+                await EnqueueString(mqttClient, $"kissproxy/{Environment.MachineName}/{LastDelimitation(comPort)}/fromModem/debug", JsonSerializer.Serialize(new { seq = seq++, val = Convert.ToHexString(new[] { (byte)read }).ToLower() }));
                 await ProcessBuffer(serialBuffer, tcpSend, false, mqttClient, comPort!, mqttTopic, base64);
             }
         }
@@ -170,6 +172,7 @@ static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, strin
                 tcpSend = buffer => tcpStream.Write(buffer.ToArray(), 0, buffer.Count);
                 LogInformation(instance, "Accepted TCP node connection");
 
+                int seq = 0;
                 List<byte> tcpBuffer = new();
                 while (true)
                 {
@@ -192,6 +195,9 @@ static async Task Run(string comPort, int baud, int tcpPort, bool anyHost, strin
                         break;
                     }
                     tcpBuffer.Add((byte)read);
+
+                    await EnqueueString(mqttClient, $"kissproxy/{Environment.MachineName}/{LastDelimitation(comPort)}/toModem/debug", JsonSerializer.Serialize(new { seq = seq++, val = Convert.ToHexString(new[] { (byte)read }).ToLower() }));
+
                     await ProcessBuffer(tcpBuffer, serialSend, true, mqttClient, comPort, mqttTopic, base64);
                 }
             }
@@ -309,7 +315,7 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
         var (rawFrame, portId, commandCode) = Unkiss(buffer);
         await EnqueueBytes(client, $"{topic}/unframed/port{portId}/{commandCode}KissCmd", rawFrame, convertToBase64);
 
-        try
+        /*try
         {
             if (commandCode == KissCommandCode.DataFrame && Frame.TryParse(rawFrame, out var frame))
             {
@@ -333,6 +339,7 @@ public void DecodeException_{Guid.NewGuid().ToString().Replace("-", "")}()
 
             LogInformation(instance, "Error decoding a frame, generated a test");
         }
+        */
     }
     catch (Exception ex)
     {
@@ -340,9 +347,9 @@ public void DecodeException_{Guid.NewGuid().ToString().Replace("-", "")}()
     }
 }
 
-static async Task EnqueueString(IManagedMqttClient client, string topic, string? payload)
+static async Task EnqueueString(IManagedMqttClient? client, string topic, string? payload)
 {
-    if (payload == null)
+    if (client == null || payload == null)
     {
         return;
     }

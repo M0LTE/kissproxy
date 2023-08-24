@@ -317,7 +317,7 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
 
         /*try
         {
-            if (commandCode == KissCommandCode.DataFrame && Frame.TryParse(rawFrame, out var frame))
+            if ((commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode) && Frame.TryParse(rawFrame, out var frame))
             {
                 await EnqueueString(client, $"{topic}/unframed/port{portId}/{KissCommandCode.DataFrame}", frame.ToString());
                 LogInformation(instance, frame.ToString());
@@ -338,8 +338,7 @@ public void DecodeException_{Guid.NewGuid().ToString().Replace("-", "")}()
             File.AppendAllText("GeneratedUnitTests.txt", test);
 
             LogInformation(instance, "Error decoding a frame, generated a test");
-        }
-        */
+        }*/
     }
     catch (Exception ex)
     {

@@ -324,7 +324,6 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
             var description = await GetDescription(instance, rawFrame);
             if (description != null)
             {
-                LogInformation(instance, description);
                 await EnqueueString(client, $"{topic}/decoded/port{portId}/", description);
             }
         }

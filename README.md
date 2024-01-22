@@ -45,9 +45,11 @@ Under that topic are further sub-topics:
 
 `/unframed/$kissport/$kisscommand` - for these topics, the MQTT payload is the unpacked/unescaped frame, normally but not necessarily AX.25, separated by TNC port and KISS command id.
 
-The KISS port will always be port0 for single-port TNCs.
-
 The KISS command represents the command byte unpacked from the KISS framing.
+
+`/decoded/$kissport` - the payload is a human-readable representation. Requires ax2txt (https://github.com/Online-Amateur-Radio-Club-M0OUK/ax2txt) binary to be present at /opt/ax2txt/ax2txt.
+
+The KISS port will always be port0 for single-port TNCs.
 
 ## Windows usage
 
@@ -59,14 +61,14 @@ cd kissproxy\src\kissproxy
 dotnet run
 ```
 
-assuming .NET 7 is installed. Then point LinBPQ at it as below. Awaiting feedback / demonstrated need, since it's not too common to run a packet node on Windows these days, let alone debug one.
+assuming .NET 8 is installed. Then point LinBPQ at it as below. Awaiting feedback / demonstrated need, since it's not too common to run a packet node on Windows these days, let alone debug one.
 
 ## Linux Build / Install
 
 ### Prerequisites
-.NET 7 SDK:
+.NET 8 SDK:
 ```
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel STS
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel LTS
 echo 'export DOTNET_ROOT=$HOME/.dotnet' >> ~/.bashrc
 echo 'export PATH=$PATH:$HOME/.dotnet' >> ~/.bashrc
 source ~/.bashrc

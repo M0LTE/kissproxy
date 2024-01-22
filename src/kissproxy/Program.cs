@@ -1,4 +1,6 @@
-﻿using kissproxy;
+﻿using CliWrap;
+using kissproxy;
+using Microsoft.Extensions.Logging;
 using MoreLinq;
 using MQTTnet;
 using MQTTnet.Client;
@@ -6,9 +8,12 @@ using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Protocol;
 using NAx25;
 using System.CommandLine;
+using System.CommandLine.Parsing;
+using System.Diagnostics;
 using System.IO.Ports;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using static kissproxy.KissHelpers;
 using static NAx25.KissFraming;
@@ -314,36 +319,95 @@ static async Task PublishKissFrame(IManagedMqttClient? client, List<byte> buffer
     {
         var (rawFrame, portId, commandCode) = Unkiss(buffer);
         await EnqueueBytes(client, $"{topic}/unframed/port{portId}/{commandCode}KissCmd", rawFrame, convertToBase64);
-
-        /*try
+        if (commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode)
         {
-            if ((commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode) && Frame.TryParse(rawFrame, out var frame))
+            var description = await GetDescription(instance, rawFrame);
+            if (description != null)
             {
-                await EnqueueString(client, $"{topic}/unframed/port{portId}/{KissCommandCode.DataFrame}", frame.ToString());
-                LogInformation(instance, frame.ToString());
+                LogInformation(instance, description);
+                await EnqueueString(client, $"{topic}/decoded/port{portId}/", description);
             }
         }
-        catch (Exception ex)
-        {
-            var test = @$"
-[Fact]
-public void DecodeException_{Guid.NewGuid().ToString().Replace("-", "")}()
-{{
-    // {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}
-    // {ex.GetType().Name}: {ex.Message}
-    Frame.TryParse(Convert.FromHexString(""{Convert.ToHexString(rawFrame).ToLower()}""), out var frame).Should().BeTrue();
-    frame.ToString();
-}}";
-
-            File.AppendAllText("GeneratedUnitTests.txt", test);
-
-            LogInformation(instance, "Error decoding a frame, generated a test");
-        }*/
     }
     catch (Exception ex)
     {
         LogInformation(instance, $"Problem decoding frame: {ex.Message}");
     }
+}
+
+static async Task<string?> GetDescription(string instance, byte[] frame)
+{
+    const string prog = "/opt/ax2txt/ax2txt";
+
+    if (!File.Exists(prog))
+    {
+        return null;
+    }
+
+    if (frame == null || frame.Length == 0)
+    {
+        return null;
+    }
+
+    try
+    {
+        var buffer = new StringBuilder();
+
+        var cmd = frame
+            | Cli.Wrap(prog)
+                .WithValidation(CommandResultValidation.None)
+            | PipeTarget.ToStringBuilder(buffer);
+
+        CliWrap.CommandResult execution;
+        var sw = Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            execution = await cmd.ExecuteAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            LogError(instance, $"ax2txt took too long: {sw.ElapsedMilliseconds:0}ms, and was killed");
+            return null;
+        }
+
+        if (!execution.IsSuccess)
+        {
+            try
+            {
+                var dir = "/tmp/kissproxy";
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                var tmp = Path.Combine($"/tmp/kissproxy/{Guid.NewGuid()}");
+                await File.WriteAllBytesAsync(tmp, frame);
+                LogError(instance, $"ax2txt returned exit code {execution.ExitCode}, data saved {tmp}");
+            }
+            catch (Exception ex)
+            {
+                LogError(instance, $"ax2txt returned exit code {execution.ExitCode}, got exception while saving data: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        var result = buffer.ToString();
+
+        if (!string.IsNullOrWhiteSpace(result))
+        {
+            return result.Trim();
+        }
+    }
+    catch (Exception ex)
+    {
+        LogError(instance, $"While running ax2txt: {ex.Message}");
+        return null;
+    }
+
+    LogError(instance, "Fell out the bottom");
+    return null;
 }
 
 static async Task EnqueueString(IManagedMqttClient? client, string topic, string? payload)
@@ -381,6 +445,11 @@ static string LastDelimitation(string comPort)
 }
 
 static void LogInformation(string instance, string message)
+{
+    Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");
+}
+
+static void LogError(string instance, string message)
 {
     Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");
 }

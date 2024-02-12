@@ -5,7 +5,7 @@ namespace kissproxy;
 
 internal class Program
 {
-    static void Main(string[] args)
+    static int Main(string[] args)
     {
         var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
         comPortOption.AddAlias("-c");
@@ -64,7 +64,8 @@ internal class Program
 
                 var file = File.ReadAllText(configFile);
                 var config = JsonSerializer.Deserialize<Config[]>(file, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                List<Task> tasks = new();
+                List<Task> tasks = [];
+                LogInformation("", $"Found {config!.Length} ports configured");
                 foreach (var instance in config!)
                 {
                     Proxy proxy = new(instance.ComPort, LogInformation, LogError);
@@ -88,6 +89,8 @@ internal class Program
                 await new Proxy("", LogInformation, LogError).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
             }
         });
+
+        return rootCommand.Invoke(args);
     }
 
     private static void LogInformation(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");

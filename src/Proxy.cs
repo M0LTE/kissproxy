@@ -8,6 +8,8 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
 {
     internal async Task Run(string comPort, int baud, int tcpPort, bool anyHost, string? mqttServer, string? mqttUsername, string? mqttPassword, string? mqttTopic, bool base64)
     {
+        LogInformation(instance, "Starting");
+
         try
         {
             while (true)
@@ -40,6 +42,8 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                     continue;
                 }
 
+                LogInformation(instance, $"Opened serial port {comPort}");
+
                 Task nodeToModem = Task.Run(() =>
                 {
                     while (true)
@@ -51,18 +55,28 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                         }
                         catch (Exception)
                         {
-                            LogInformation(instance, "Node disconnected (read threw), task ending");
+                            LogError(instance, "Node disconnected (read threw), closing serial port");
+                            serialPort.Close();
                             return;
                         }
 
-                        if (read == -1)
+                        if (read < 0)
                         {
-                            LogInformation(instance, "Node disconnected (read returned -1), task ending");
+                            LogError(instance, $"Node disconnected (read returned {read}), closing serial port");
                             serialPort.Close();
                             break;
                         }
 
-                        serialPort.Write(new[] { (byte)read }, 0, 1);
+                        try
+                        {
+                            serialPort.Write(new[] { (byte)read }, 0, 1);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogError(instance, $"Writing byte to modem blew up with \"{ex.Message}\", closing serial port");
+                            serialPort.Close();
+                            break;
+                        }
                     }
                 });
 
@@ -77,13 +91,15 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                         }
                         catch (Exception ex)
                         {
-                            LogError(instance, $"Reading byte from modem blew up with {ex.Message}, task ending");
+                            LogError(instance, $"Reading byte from modem blew up with \"{ex.Message}\", disconnecting node");
+                            tcpClient.Close();
                             return;
                         }
 
                         if (i < 0)
                         {
-                            LogError(instance, $"modem read returned {i}, task ending");
+                            LogError(instance, $"modem read returned {i}, disconnecting node");
+                            tcpClient.Close();
                             return;
                         }
 
@@ -93,7 +109,8 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                         }
                         catch (Exception ex)
                         {
-                            LogError(instance, $"Writing byte to node blew up with {ex.Message}, task ending");
+                            LogError(instance, $"Writing byte to node blew up with \"{ex.Message}\", disconnecting node");
+                            tcpClient.Close();
                             return;
                         }
                     }

@@ -46,6 +46,7 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
 
                 Task nodeToModem = Task.Run(() =>
                 {
+                    List<byte> buffer = [];
                     while (true)
                     {
                         int read;
@@ -67,9 +68,12 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                             break;
                         }
 
+                        var b = (byte)read;
+                        Process(true, b);
+
                         try
                         {
-                            serialPort.Write(new[] { (byte)read }, 0, 1);
+                            serialPort.Write(new[] { b }, 0, 1);
                         }
                         catch (Exception ex)
                         {
@@ -84,10 +88,10 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                 {
                     while (true)
                     {
-                        int i;
+                        int read;
                         try
                         {
-                            i = serialPort.ReadByte();
+                            read = serialPort.ReadByte();
                         }
                         catch (Exception ex)
                         {
@@ -96,16 +100,19 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                             return;
                         }
 
-                        if (i < 0)
+                        if (read < 0)
                         {
-                            LogError(instance, $"modem read returned {i}, disconnecting node");
+                            LogError(instance, $"modem read returned {read}, disconnecting node");
                             tcpClient.Close();
                             return;
                         }
 
+                        var b = (byte)read;
+                        Process(false, b);
+
                         try
                         {
-                            tcpStream.WriteByte((byte)i);
+                            tcpStream.WriteByte((byte)read);
                         }
                         catch (Exception ex)
                         {
@@ -123,5 +130,13 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
         {
             LogError(instance, $"Top level exception handled: {ex}");
         }
+    }
+
+    private readonly List<byte> inboundBuffer = [];
+    private readonly List<byte> outboundBuffer = [];
+
+    private void Process(bool outbound, byte b)
+    {
+        KissHelpers.Process(outbound ? outboundBuffer : inboundBuffer, b, frame => { });
     }
 }

@@ -20,14 +20,16 @@ public class Proxy
     private readonly string instance;
     private readonly Action<string, string> LogInformation;
     private readonly Action<string, string> LogError;
+    private readonly Action<string, string> LogDebug;
     private readonly ISerialPortFactory serialPortFactory;
     private IManagedMqttClient? mqttClient;
 
-    public Proxy(string instance, Action<string, string> logInformation, Action<string, string> logError, ISerialPortFactory serialPortFactory)
+    public Proxy(string instance, Action<string, string> logInformation, Action<string, string> logError, Action<string, string> logDebug, ISerialPortFactory serialPortFactory)
     {
         this.instance = instance;
         LogInformation = logInformation;
         LogError = logError;
+        LogDebug = logDebug;
         this.serialPortFactory = serialPortFactory;
     }
 
@@ -269,7 +271,7 @@ public class Proxy
 
         if (!string.IsNullOrWhiteSpace(description))
         {
-            LogInformation(instance, $"{(outbound ? "outbound" : "inbound")} {kissFrame.Length} bytes: {description}");
+            LogDebug(instance, $"{(outbound ? "outbound" : "inbound")} {kissFrame.Length} bytes: {description}");
         }
     }
 

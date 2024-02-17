@@ -11,7 +11,7 @@ public class ProxyTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public async void Integration()
     {
-        var target = new Proxy("test", LogInformation, LogError, new MockSerialPortFactory());
+        var target = new Proxy("test", Log, Log, Log, new MockSerialPortFactory());
         var runner = Task.Run(async () => await target.Run("", 0, 12345, false, default, default, default, default, default));
 
         var tcpClient = new TcpClient();
@@ -23,15 +23,7 @@ public class ProxyTests(ITestOutputHelper testOutputHelper)
         await Task.Delay(5000);
     }
 
-    private void LogError(string instance, string message)
-    {
-        testOutputHelper.WriteLine(message);
-    }
-
-    private void LogInformation(string instance, string message)
-    {
-        testOutputHelper.WriteLine(message);
-    }
+    private void Log(string instance, string message) => testOutputHelper.WriteLine(message);
 }
 
 internal class MockSerialPortFactory : ISerialPortFactory

@@ -1,5 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.CommandLine;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace kissproxy;
@@ -80,7 +81,7 @@ internal class Program
                 Collection<Task> tasks = [];
                 foreach (var instance in config)
                 {
-                    Proxy proxy = new(instance.Id, LogInformation, LogError, new SerialPortFactory());
+                    Proxy proxy = new(instance.Id, LogInformation, LogError, LogDebug, new SerialPortFactory());
                     tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopic, instance.Base64)));
                 }
                 Task.WaitAll([.. tasks]);
@@ -97,13 +98,14 @@ internal class Program
                 var mqttTopic = context.ParseResult.GetValueForOption(brokerTopicOption);
                 var base64 = context.ParseResult.GetValueForOption(publishBase64Option);
 
-                await new Proxy("", LogInformation, LogError, new SerialPortFactory()).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
+                await new Proxy("", LogInformation, LogError, LogDebug, new SerialPortFactory()).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
             }
         });
 
         return rootCommand.Invoke(args);
     }
 
+    private static void LogDebug(string instance, string message) => Debug.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
     private static void LogInformation(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
     private static void LogError(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
 }

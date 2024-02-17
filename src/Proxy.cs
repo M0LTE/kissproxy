@@ -10,9 +10,6 @@ public class Proxy
 {
     public Proxy(string instance, Action<string, string> logInformation, Action<string, string> logError, ISerialPortFactory serialPortFactory)
     {
-        inboundProcess = new(b => ProcessByte(false, b), new ExecutionDataflowBlockOptions { EnsureOrdered = true, MaxDegreeOfParallelism = 1 });
-        outboundProcess = new(b => ProcessByte(true, b), new ExecutionDataflowBlockOptions { EnsureOrdered = true, MaxDegreeOfParallelism = 1 });
-
         this.instance = instance;
         LogInformation = logInformation;
         LogError = logError;
@@ -82,7 +79,6 @@ public class Proxy
                         }
 
                         var b = (byte)read;
-                        Process(true, b);
 
                         try
                         {
@@ -121,7 +117,6 @@ public class Proxy
                         }
 
                         var b = (byte)read;
-                        Process(false, b);
 
                         try
                         {
@@ -145,33 +140,8 @@ public class Proxy
         }
     }
 
-    private readonly List<byte> inboundBufferData = [];
-    private readonly List<byte> outboundBufferData = [];
-
-    private void Process(bool outbound, byte b)
-    {
-        var action = outbound ? outboundProcess : inboundProcess;
-        Debug.Assert(action.Post(b));
-    }
-
-    private readonly ActionBlock<byte> inboundProcess;
-    private readonly ActionBlock<byte> outboundProcess;
-
     private readonly string instance;
     private readonly Action<string, string> LogInformation;
     private readonly Action<string, string> LogError;
     private readonly ISerialPortFactory serialPortFactory;
-
-    private void ProcessByte(bool outbound, byte b)
-    {
-        LogInformation(instance, $"{nameof(ProcessByte)}({(outbound ? "outbound" : "inbound")}, {b})");
-        var buffer = outbound ? outboundBufferData : inboundBufferData;
-        buffer.Add(b);
-        KissHelpers.ProcessBuffer(buffer, b, frame => ProcessFrame(outbound, frame));
-    }
-
-    private void ProcessFrame(bool outbound, byte[] frame)
-    {
-        LogInformation(instance, $"Frame received: {(outbound ? "outbound" : "inbound")}, {frame.Length} bytes");
-    }
 }

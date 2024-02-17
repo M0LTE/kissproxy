@@ -6,18 +6,13 @@ namespace kissproxy_tests;
 public class KissHelpersTests
 {
     private const byte FEND = 0xc0;
-    private List<byte>? frame = null;
-
-    private void ProcessFrame(List<byte> bytes)
-    {
-        frame = bytes.ToList();
-    }
+    private byte[]? frame = null;
 
     [Fact]
     public void DiscardsRepeatedFENDs()
     {
         List<byte> bytes = [FEND];
-        KissHelpers.Process(bytes, FEND, ProcessFrame);
+        KissHelpers.ProcessBuffer(bytes, FEND, f => frame = f);
         bytes.Should().Equal(FEND);
         frame.Should().BeNull();
     }
@@ -26,7 +21,7 @@ public class KissHelpersTests
     public void ProcessesFrames()
     {
         List<byte> buffer = [FEND, 0x11];
-        KissHelpers.Process(buffer, FEND, ProcessFrame);
+        KissHelpers.ProcessBuffer(buffer, FEND, f => frame = f);
         buffer.Should().BeEmpty();
         frame.Should().Equal(FEND, 0x11, FEND);
     }

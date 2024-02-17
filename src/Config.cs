@@ -2,6 +2,7 @@
 
 internal record Config
 {
+    public required string Id { get; set; }
     public required string ComPort { get; set; }
     public int Baud { get; set; } = 57600;
     public int TcpPort { get; set; } = 8910;

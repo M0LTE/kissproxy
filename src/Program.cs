@@ -1,11 +1,14 @@
-﻿using System.CommandLine;
+﻿using System.Collections.ObjectModel;
+using System.CommandLine;
 using System.Text.Json;
 
 namespace kissproxy;
 
 internal class Program
 {
-    static int Main(string[] args)
+    private static readonly JsonSerializerOptions options = new() { PropertyNameCaseInsensitive = true };
+
+    private static int Main(string[] args)
     {
         var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
         comPortOption.AddAlias("-c");
@@ -48,7 +51,6 @@ internal class Program
         rootCommand.AddOption(brokerPasswordOption);
         rootCommand.AddOption(brokerTopicOption);
         rootCommand.AddOption(publishBase64Option);
-
         rootCommand.SetHandler(async context =>
         {
             string configFile = "/etc/kissproxy.conf";
@@ -63,14 +65,23 @@ internal class Program
                 LogInformation("", $"Using {configFile} and ignoring any command line parameters");
 
                 var file = File.ReadAllText(configFile);
-                var config = JsonSerializer.Deserialize<Config[]>(file, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                List<Task> tasks = [];
-                LogInformation("", $"Found {config!.Length} ports configured");
-                foreach (var instance in config!)
+                Config[] config;
+                try
                 {
-                    Proxy proxy = new(instance.ComPort, LogInformation, LogError);
-                    var t = proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopic, instance.Base64);
-                    tasks.Add(t);
+                    config = JsonSerializer.Deserialize<Config[]>(file, options) ?? throw new InvalidOperationException();
+                }
+                catch (Exception ex)
+                {
+                    LogError("", $"Error reading config file: {ex.Message}");
+                    Environment.Exit(-1);
+                    return;
+                }
+
+                Collection<Task> tasks = [];
+                foreach (var instance in config)
+                {
+                    Proxy proxy = new(instance.Id, LogInformation, LogError, new SerialPortFactory());
+                    tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopic, instance.Base64)));
                 }
                 Task.WaitAll([.. tasks]);
             }
@@ -86,13 +97,13 @@ internal class Program
                 var mqttTopic = context.ParseResult.GetValueForOption(brokerTopicOption);
                 var base64 = context.ParseResult.GetValueForOption(publishBase64Option);
 
-                await new Proxy("", LogInformation, LogError).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
+                await new Proxy("", LogInformation, LogError, new SerialPortFactory()).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
             }
         });
 
         return rootCommand.Invoke(args);
     }
 
-    private static void LogInformation(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");
-    private static void LogError(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}  {message}");
+    private static void LogInformation(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
+    private static void LogError(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
 }

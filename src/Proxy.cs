@@ -1,12 +1,25 @@
-﻿using System.IO.Ports;
+﻿using System.Diagnostics;
+//using System.IO.Ports;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading.Tasks.Dataflow;
 
 namespace kissproxy;
 
-internal class Proxy(string instance, Action<string, string> LogInformation, Action<string, string> LogError)
+public class Proxy
 {
-    internal async Task Run(string comPort, int baud, int tcpPort, bool anyHost, string? mqttServer, string? mqttUsername, string? mqttPassword, string? mqttTopic, bool base64)
+    public Proxy(string instance, Action<string, string> logInformation, Action<string, string> logError, ISerialPortFactory serialPortFactory)
+    {
+        inboundProcess = new(b => ProcessByte(false, b), new ExecutionDataflowBlockOptions { EnsureOrdered = true, MaxDegreeOfParallelism = 1 });
+        outboundProcess = new(b => ProcessByte(true, b), new ExecutionDataflowBlockOptions { EnsureOrdered = true, MaxDegreeOfParallelism = 1 });
+
+        this.instance = instance;
+        LogInformation = logInformation;
+        LogError = logError;
+        this.serialPortFactory = serialPortFactory;
+    }
+
+    public async Task Run(string comPort, int baud, int tcpPort, bool anyHost, string? mqttServer, string? mqttUsername, string? mqttPassword, string? mqttTopic, bool base64)
     {
         LogInformation(instance, "Starting");
 
@@ -31,7 +44,7 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
                 using var tcpStream = tcpClient.GetStream();
                 LogInformation(instance, $"Accepted TCP node connection on port {tcpPort}");
 
-                using SerialPort serialPort = new(comPort, baud);
+                using ISerialPort serialPort = serialPortFactory.Create(comPort, baud);
                 try
                 {
                     serialPort.Open();
@@ -73,7 +86,7 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
 
                         try
                         {
-                            serialPort.Write(new[] { b }, 0, 1);
+                            serialPort.Write([b], 0, 1);
                         }
                         catch (Exception ex)
                         {
@@ -132,11 +145,33 @@ internal class Proxy(string instance, Action<string, string> LogInformation, Act
         }
     }
 
-    private readonly List<byte> inboundBuffer = [];
-    private readonly List<byte> outboundBuffer = [];
+    private readonly List<byte> inboundBufferData = [];
+    private readonly List<byte> outboundBufferData = [];
 
     private void Process(bool outbound, byte b)
     {
-        KissHelpers.Process(outbound ? outboundBuffer : inboundBuffer, b, frame => { });
+        var action = outbound ? outboundProcess : inboundProcess;
+        Debug.Assert(action.Post(b));
+    }
+
+    private readonly ActionBlock<byte> inboundProcess;
+    private readonly ActionBlock<byte> outboundProcess;
+
+    private readonly string instance;
+    private readonly Action<string, string> LogInformation;
+    private readonly Action<string, string> LogError;
+    private readonly ISerialPortFactory serialPortFactory;
+
+    private void ProcessByte(bool outbound, byte b)
+    {
+        LogInformation(instance, $"{nameof(ProcessByte)}({(outbound ? "outbound" : "inbound")}, {b})");
+        var buffer = outbound ? outboundBufferData : inboundBufferData;
+        buffer.Add(b);
+        KissHelpers.ProcessBuffer(buffer, b, frame => ProcessFrame(outbound, frame));
+    }
+
+    private void ProcessFrame(bool outbound, byte[] frame)
+    {
+        LogInformation(instance, $"Frame received: {(outbound ? "outbound" : "inbound")}, {frame.Length} bytes");
     }
 }

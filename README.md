@@ -162,9 +162,12 @@ If you want to run more than one TNC, don't specify any command line parameters.
 ```
 [
   {
+      "id": "2m",
       "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0",
+      "tcpPort": 8910,
       "mqttServer": "mqtt"
   }, {
+      "id": "70cm",
       "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.3:1.0",
       "tcpPort": 8911,
       "mqttServer": "mqtt"

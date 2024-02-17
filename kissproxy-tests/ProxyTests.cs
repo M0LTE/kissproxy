@@ -17,7 +17,7 @@ public class ProxyTests(ITestOutputHelper testOutputHelper)
         var tcpClient = new TcpClient();
         tcpClient.Connect("localhost", 12345);
         var stream = tcpClient.GetStream();
-        stream.Write(new byte[] { FEND, 0x11, FEND });
+        stream.Write(new byte[] { FEND, FEND, 0x11, FEND, FEND, FEND, 0x12, FEND });
         stream.Flush();
 
         await Task.Delay(5000);

@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <PackageId>m0lte.kissproxylib</PackageId>
-    <Version>0.0.3</Version>
+    <Version>0.0.4</Version>
     <Authors>Tom Fanning</Authors>
     <RootNamespace>kissproxylib</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>

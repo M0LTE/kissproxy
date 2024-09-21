@@ -78,8 +78,19 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         await mqttClient.EnqueueAsync(messageBuilder.Build());
     }
 
+    public Task Run(
+        string modemComPort,
+        int modemSerialBaud = 57600,
+        int listenForNodeOnTcpPort = 8910,
+        bool allowTcpConnectFromOtherHosts = false,
+        string? mqttServer = null,
+        string? mqttUsername = null,
+        string? mqttPassword = null,
+        bool emitAsBase64String = false) => Run(modemComPort, CancellationToken.None, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUsername, mqttPassword, emitAsBase64String);
+
     public async Task Run(
-        string modemComPort, 
+        string modemComPort,
+        CancellationToken cancellationToken,
         int modemSerialBaud = 57600, 
         int listenForNodeOnTcpPort = 8910,
         bool allowTcpConnectFromOtherHosts = false,
@@ -226,7 +237,15 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
                     }
                 });
 
-                await Task.WhenAll(nodeToModem, modemToNode);
+                do
+                {
+                    await Task.Delay(1000);
+                } while (!cancellationToken.IsCancellationRequested);
+
+                tcpStream.Socket.Shutdown(SocketShutdown.Both);
+                serialPort.Close();
+
+                //await Task.WhenAll(nodeToModem, modemToNode);
             }
         }
         catch (Exception ex)

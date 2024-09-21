@@ -1,6 +1,6 @@
 ﻿using System.IO.Ports;
 
-namespace kissproxy;
+namespace kissproxylib;
 
 public interface ISerialPort : IDisposable
 {

@@ -1,4 +1,6 @@
-﻿using System.Collections.ObjectModel;
+﻿using kissproxylib;
+using Microsoft.Extensions.Logging;
+using System.Collections.ObjectModel;
 using System.CommandLine;
 using System.Diagnostics;
 using System.Text.Json;
@@ -37,9 +39,6 @@ internal class Program
         var brokerPasswordOption = new Option<string?>("--mqtt-pass", "MQTT password");
         brokerPasswordOption.AddAlias("-mp");
 
-        var brokerTopicOption = new Option<string?>("--mqtt-topic", "MQTT topic");
-        brokerTopicOption.AddAlias("-mt");
-
         var publishBase64Option = new Option<bool>("--base64", "Publish base64 strings rather than raw bytes");
 
         var rootCommand = new RootCommand("Serial-to-TCP proxy for serial KISS modems, including MQTT tracing support.");
@@ -50,7 +49,6 @@ internal class Program
         rootCommand.AddOption(brokerOption);
         rootCommand.AddOption(brokerUserOption);
         rootCommand.AddOption(brokerPasswordOption);
-        rootCommand.AddOption(brokerTopicOption);
         rootCommand.AddOption(publishBase64Option);
         rootCommand.SetHandler(async context =>
         {
@@ -81,31 +79,71 @@ internal class Program
                 Collection<Task> tasks = [];
                 foreach (var instance in config)
                 {
-                    Proxy proxy = new(instance.Id, LogInformation, LogError, LogDebug, new SerialPortFactory());
-                    tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopic, instance.Base64)));
+                    KissProxy proxy = new(instance.Id, new ConsoleLogger());
+                    tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.Base64)));
                 }
                 Task.WaitAll([.. tasks]);
             }
             else
             {
-                var comPort = context.ParseResult.GetValueForOption(comPortOption);
-                var baud = context.ParseResult.GetValueForOption(baudOption);
-                var tcpPort = context.ParseResult.GetValueForOption(tcpPortOption);
-                var anyHost = context.ParseResult.GetValueForOption(anyHostOption);
+                var modemComPort = context.ParseResult.GetValueForOption(comPortOption);
+                var modemSerialBaud = context.ParseResult.GetValueForOption(baudOption);
+                var listenForNodeOnTcpPort = context.ParseResult.GetValueForOption(tcpPortOption);
+                var allowTcpConnectFromOtherHosts = context.ParseResult.GetValueForOption(anyHostOption);
                 var mqttServer = context.ParseResult.GetValueForOption(brokerOption);
                 var mqttUser = context.ParseResult.GetValueForOption(brokerUserOption);
                 var mqttPassword = context.ParseResult.GetValueForOption(brokerPasswordOption);
-                var mqttTopic = context.ParseResult.GetValueForOption(brokerTopicOption);
-                var base64 = context.ParseResult.GetValueForOption(publishBase64Option);
+                var emitFramesToMqttAsBase64String = context.ParseResult.GetValueForOption(publishBase64Option);
 
-                await new Proxy("", LogInformation, LogError, LogDebug, new SerialPortFactory()).Run(comPort!, baud, tcpPort, anyHost, mqttServer, mqttUser, mqttPassword, mqttTopic, base64);
+                await new KissProxy(new ConsoleLogger())
+                    .Run(modemComPort!, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUser, mqttPassword, emitFramesToMqttAsBase64String);
             }
         });
 
         return rootCommand.Invoke(args);
     }
 
-    private static void LogDebug(string instance, string message) => Debug.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
-    private static void LogInformation(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
-    private static void LogError(string instance, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instance}{(instance == "" ? "" : "  ")}{message}");
+    private class ConsoleLogger : ILogger
+    {
+        private string instanceName = "";
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel > LogLevel.Information)
+            {
+                LogError(instanceName, formatter(state, exception));
+            }
+            else if (logLevel > LogLevel.Debug)
+            {
+                LogInformation(instanceName, formatter(state, exception));
+            }
+            else if (logLevel > LogLevel.Trace)
+            {
+                LogDebug(instanceName, formatter(state, exception));
+            }
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+        {
+            if (state != null)
+            {
+                instanceName = state.ToString()!;
+            }
+
+            return new MyDisposable();
+        }
+
+        public sealed class MyDisposable : IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private static void LogDebug(string instanceName, string message) => Debug.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instanceName}{(instanceName == "" ? "" : "  ")}{message}");
+    private static void LogInformation(string instanceName, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instanceName}{(instanceName == "" ? "" : "  ")}{message}");
+    private static void LogError(string instanceName, string message) => Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {instanceName}{(instanceName == "" ? "" : "  ")}{message}");
 }

@@ -1,53 +1,47 @@
 ﻿using CliWrap;
-using NAx25;
-using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using static NAx25.KissFraming;
+using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Protocol;
-using System;
+using NAx25;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using static NAx25.KissFraming;
 
-namespace kissproxy;
+namespace kissproxylib;
 
-public class Proxy
+public class KissProxy(string instance, ILogger logger, ISerialPortFactory serialPortFactory)
 {
     private readonly List<byte> inboundBufferData = [];
     private readonly List<byte> outboundBufferData = [];
-    private readonly string instance;
-    private readonly Action<string, string> LogInformation;
-    private readonly Action<string, string> LogError;
-    private readonly Action<string, string> LogDebug;
-    private readonly ISerialPortFactory serialPortFactory;
     private IManagedMqttClient? mqttClient;
 
-    public Proxy(string instance, Action<string, string> logInformation, Action<string, string> logError, Action<string, string> logDebug, ISerialPortFactory serialPortFactory)
-    {
-        this.instance = instance;
-        LogInformation = logInformation;
-        LogError = logError;
-        LogDebug = logDebug;
-        this.serialPortFactory = serialPortFactory;
-    }
+    public KissProxy(ILogger logger) : this("", logger) { }
+
+    public KissProxy(string instance, ILogger logger)
+        : this(instance, logger, new SerialPortFactory()) { }
 
     private Task MqttClient_ConnectedAsync(MqttClientConnectedEventArgs arg)
     {
-        LogInformation(instance, "Connected to MQTT broker");
+        logger.LogInformation("Connected to MQTT broker");
         return Task.CompletedTask;
     }
 
+    private IDisposable? BeginLoggingScope() => !string.IsNullOrWhiteSpace(instance) ? logger.BeginScope(new Dictionary<string, object>() { { "instance", instance } }) : null;
+
     private Task MqttClient_DisconnectedAsync(MqttClientDisconnectedEventArgs arg)
     {
-        LogInformation("", "Disconnected from MQTT broker: " + arg?.ReasonString);
+        logger.LogWarning("Disconnected from MQTT broker: {reason}", arg?.ReasonString);
         return Task.CompletedTask;
     }
 
     private Task MqttClient_ConnectingFailedAsync(ConnectingFailedEventArgs arg)
     {
-        LogInformation("", "Failed to connect to MQTT broker: " + arg?.Exception?.Message);
+        logger.LogWarning("Failed to connect to MQTT broker: {reason}", arg?.Exception?.Message);
         return Task.CompletedTask;
     }
 
@@ -66,7 +60,7 @@ public class Proxy
         await mqttClient.EnqueueAsync(messageBuilder.Build());
     }
 
-    private async Task EnqueueBytes(string topic, IList<byte> bytes, bool convertToBase64)
+    private async Task SendBytesToMqttTopic(string topic, IList<byte> bytes, bool emitAsBase64String)
     {
         if (mqttClient == null)
         {
@@ -77,22 +71,31 @@ public class Proxy
             .WithTopic(topic)
             .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.ExactlyOnce);
 
-        messageBuilder = convertToBase64
+        messageBuilder = emitAsBase64String
             ? messageBuilder.WithPayload(Convert.ToBase64String(bytes.ToArray(), Base64FormattingOptions.InsertLineBreaks))
             : messageBuilder.WithPayload(bytes.ToArray());
 
         await mqttClient.EnqueueAsync(messageBuilder.Build());
     }
 
-    public async Task Run(string comPort, int baud, int tcpPort, bool anyHost, string? mqttServer, string? mqttUsername, string? mqttPassword, string? mqttTopic, bool base64)
+    public async Task Run(
+        string modemComPort, 
+        int modemSerialBaud = 57600, 
+        int listenForNodeOnTcpPort = 8910,
+        bool allowTcpConnectFromOtherHosts = false,
+        string? mqttServer = null, 
+        string? mqttUsername = null, 
+        string? mqttPassword = null, 
+        bool emitAsBase64String = false)
     {
-        LogInformation(instance, "Starting");
+        using var scope = BeginLoggingScope();
+        logger.LogDebug("Starting");
 
         if (!string.IsNullOrWhiteSpace(mqttServer))
         {
             var (server, port) = SplitMqttServer(mqttServer);
 
-            LogInformation(instance, $"Connecting to MQTT broker {server}:{port}...");
+            logger.LogInformation("Connecting to MQTT broker {server}:{port}...", server, port);
 
             var options = new ManagedMqttClientOptionsBuilder()
                 .WithAutoReconnectDelay(TimeSpan.FromSeconds(5))
@@ -114,35 +117,35 @@ public class Proxy
         {
             while (true)
             {
-                using TcpListener tcpListener = new(anyHost ? IPAddress.Any : IPAddress.Loopback, tcpPort);
+                using TcpListener tcpListener = new(allowTcpConnectFromOtherHosts ? IPAddress.Any : IPAddress.Loopback, listenForNodeOnTcpPort);
                 try
                 {
                     tcpListener.Start();
                 }
                 catch (Exception ex)
                 {
-                    LogError(instance, $"Failed to start TCP listener: {ex.Message}");
+                    logger.LogError("Failed to start TCP listener: {reason}", ex.Message);
                     return;
                 }
 
-                LogInformation(instance, $"Awaiting node connection on port {tcpPort}");
+                logger.LogInformation("Awaiting node connection on port {port}", listenForNodeOnTcpPort);
 
                 using var tcpClient = tcpListener.AcceptTcpClient();
                 using var tcpStream = tcpClient.GetStream();
-                LogInformation(instance, $"Accepted TCP node connection on port {tcpPort}");
+                logger.LogInformation("Accepted TCP node connection on port {port}", listenForNodeOnTcpPort);
 
-                using ISerialPort serialPort = serialPortFactory.Create(comPort, baud);
+                using ISerialPort serialPort = serialPortFactory.Create(modemComPort, modemSerialBaud);
                 try
                 {
                     serialPort.Open();
                 }
                 catch (Exception ex)
                 {
-                    LogError(instance, $"Could not open {comPort}: {ex.Message}");
+                    logger.LogError("Could not open {comPort}: {reason}", modemComPort, ex.Message);
                     continue;
                 }
 
-                LogInformation(instance, $"Opened serial port {comPort}");
+                logger.LogInformation("Opened serial port {comPort}", modemComPort);
 
                 Task nodeToModem = Task.Run(() =>
                 {
@@ -156,20 +159,20 @@ public class Proxy
                         }
                         catch (Exception)
                         {
-                            LogError(instance, "Node disconnected (read threw), closing serial port");
+                            logger.LogError("Node disconnected (read threw), closing serial port");
                             serialPort.Close();
                             return;
                         }
 
                         if (read < 0)
                         {
-                            LogError(instance, $"Node disconnected (read returned {read}), closing serial port");
+                            logger.LogError("Node disconnected (read returned {read}), closing serial port", read);
                             serialPort.Close();
                             break;
                         }
 
                         var b = (byte)read;
-                        ProcessByte(outboundBufferData, true, b, base64);
+                        ProcessByte(outboundBufferData, true, b, emitAsBase64String);
 
                         try
                         {
@@ -177,7 +180,7 @@ public class Proxy
                         }
                         catch (Exception ex)
                         {
-                            LogError(instance, $"Writing byte to modem blew up with \"{ex.Message}\", closing serial port");
+                            logger.LogError("Writing byte to modem blew up with \"{error}\", closing serial port", ex.Message);
                             serialPort.Close();
                             break;
                         }
@@ -195,20 +198,20 @@ public class Proxy
                         }
                         catch (Exception ex)
                         {
-                            LogError(instance, $"Reading byte from modem blew up with \"{ex.Message}\", disconnecting node");
+                            logger.LogError("Reading byte from modem blew up with \"{error}\", disconnecting node", ex.Message);
                             tcpClient.Close();
                             return;
                         }
 
                         if (read < 0)
                         {
-                            LogError(instance, $"modem read returned {read}, disconnecting node");
+                            logger.LogError("modem read returned {read}, disconnecting node", read);
                             tcpClient.Close();
                             return;
                         }
 
                         var b = (byte)read;
-                        ProcessByte(inboundBufferData, false, b, base64);
+                        ProcessByte(inboundBufferData, false, b, emitAsBase64String);
 
                         try
                         {
@@ -216,7 +219,7 @@ public class Proxy
                         }
                         catch (Exception ex)
                         {
-                            LogError(instance, $"Writing byte to node blew up with \"{ex.Message}\", disconnecting node");
+                            logger.LogError("Writing byte to node blew up with \"{error}\", disconnecting node", ex.Message);
                             tcpClient.Close();
                             return;
                         }
@@ -228,12 +231,12 @@ public class Proxy
         }
         catch (Exception ex)
         {
-            LogError(instance, $"Top level exception handled: {ex}");
+            logger.LogError(ex, "Top level exception handled");
         }
     }
 
-    private void ProcessByte(List<byte> buffer, bool outbound, byte b, bool convertToBase64)
-        => KissHelpers.ProcessBuffer(buffer, b, frame => Task.Run(async () => await ProcessFrame(outbound, frame, convertToBase64)));
+    private void ProcessByte(List<byte> buffer, bool outbound, byte b, bool emitAsBase64String)
+        => KissHelpers.ProcessBuffer(buffer, b, frame => Task.Run(async () => await ProcessFrame(outbound, frame, emitAsBase64String)));
 
     private static string LastDelimitation(string topic, char delimiter)
     {
@@ -241,22 +244,22 @@ public class Proxy
         return parts.Last();
     }
 
-    private async Task ProcessFrame(bool outbound, byte[] kissFrame, bool convertToBase64)
+    private async Task ProcessFrame(bool outbound, byte[] kissFrame, bool emitAsBase64String)
     {
         string? description = null;
 
         var topic = $"kissproxy/{LastDelimitation(Environment.MachineName, '/')}/{instance}/{(outbound ? "to" : "from")}Modem";
 
-        await EnqueueBytes($"{topic}/framed", kissFrame, convertToBase64);
+        await SendBytesToMqttTopic($"{topic}/framed", kissFrame, emitAsBase64String);
 
         try
         {
             var (ax25Frame, portId, commandCode) = Unkiss(kissFrame);
-            await EnqueueBytes($"{topic}/unframed/port{portId}/{commandCode}KissCmd", ax25Frame, convertToBase64);
+            await SendBytesToMqttTopic($"{topic}/unframed/port{portId}/{commandCode}KissCmd", ax25Frame, emitAsBase64String);
 
             if (commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode)
             {
-                description = await GetDescription(instance, ax25Frame);
+                description = await GetDescription(ax25Frame);
                 if (description != null)
                 {
                     await EnqueueString($"{topic}/decoded/port{portId}/", description);
@@ -265,17 +268,17 @@ public class Proxy
         }
         catch (Exception ex)
         {
-            LogError(instance, ex.Message);
+            logger.LogError("Exception: {message}", ex.Message);
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(description))
         {
-            LogDebug(instance, $"{(outbound ? "outbound" : "inbound")} {kissFrame.Length} bytes: {description}");
+            logger.LogDebug("{direction} {bytes} bytes: {description}", outbound ? "outbound" : "inbound", kissFrame.Length, description);
         }
     }
 
-    private async Task<string?> GetDescription(string instance, byte[] frame)
+    private async Task<string?> GetDescription(byte[] frame)
     {
         const string prog = "/opt/ax2txt/ax2txt";
 
@@ -307,7 +310,17 @@ public class Proxy
             }
             catch (OperationCanceledException)
             {
-                LogError(instance, $"ax2txt took too long: {sw.ElapsedMilliseconds:0}ms, and was killed");
+                sw.Stop();
+                string tmp = await SaveFrame(frame);
+                try
+                {
+                    logger.LogError("ax2txt took too long: {millis}ms, and was killed, data saved {path}", sw.ElapsedMilliseconds, tmp);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError("ax2txt took too long: {millis}ms, and was killed, got exception while saving data: {error}", sw.ElapsedMilliseconds, ex.Message);
+                }
+
                 return null;
             }
 
@@ -315,19 +328,12 @@ public class Proxy
             {
                 try
                 {
-                    var dir = "/tmp/kissproxy";
-                    if (!Directory.Exists(dir))
-                    {
-                        Directory.CreateDirectory(dir);
-                    }
-
-                    var tmp = Path.Combine($"/tmp/kissproxy/{Guid.NewGuid()}");
-                    await File.WriteAllBytesAsync(tmp, frame);
-                    LogError(instance, $"ax2txt returned exit code {execution.ExitCode}, data saved {tmp}");
+                    string tmp = await SaveFrame(frame);
+                    logger.LogError("ax2txt returned exit code {exitCode}, data saved {path}", execution.ExitCode, tmp);
                 }
                 catch (Exception ex)
                 {
-                    LogError(instance, $"ax2txt returned exit code {execution.ExitCode}, got exception while saving data: {ex.Message}");
+                    logger.LogError("ax2txt returned exit code {exitCode}, got exception while saving data: {error}", execution.ExitCode, ex.Message);
                 }
 
                 return null;
@@ -342,12 +348,25 @@ public class Proxy
         }
         catch (Exception ex)
         {
-            LogError(instance, $"While running ax2txt: {ex.Message}");
+            logger.LogError("While running ax2txt: {error}", ex.Message);
             return null;
         }
 
-        LogError(instance, "Fell out the bottom");
+        logger.LogError("Fell out the bottom");
         return null;
+    }
+
+    private static async Task<string> SaveFrame(byte[] frame)
+    {
+        var dir = "/tmp/kissproxy";
+        if (!Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var tmp = Path.Combine($"/tmp/kissproxy/{Guid.NewGuid()}");
+        await File.WriteAllBytesAsync(tmp, frame);
+        return tmp;
     }
 
     private static (string server, int port) SplitMqttServer(string mqttServer)

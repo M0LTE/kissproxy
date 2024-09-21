@@ -10,6 +10,5 @@ internal record Config
     public string? MqttServer { get; set; }
     public string? MqttUsername { get; set; }
     public string? MqttPassword { get; set; }
-    public string? MqttTopic { get; set; }
     public bool Base64 { get; set; } = false;
 }

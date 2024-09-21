@@ -1,5 +1,5 @@
 using FluentAssertions;
-using kissproxy;
+using kissproxylib;
 
 namespace kissproxy_tests;
 

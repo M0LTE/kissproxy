@@ -1,4 +1,4 @@
-﻿namespace kissproxy;
+﻿namespace kissproxylib;
 
 public interface ISerialPortFactory
 {

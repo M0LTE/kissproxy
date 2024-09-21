@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace kissproxy;
+namespace kissproxylib;
 
 public static class KissHelpers
 {
@@ -24,7 +24,7 @@ public static class KissHelpers
         {
             if (buffer[0] == FEND)
             {
-                processFrame(buffer.ToArray());
+                processFrame([.. buffer]);
             }
             else
             {

@@ -1,12 +1,16 @@
-# kissproxy
+# kissproxy / kissproxylib
 
-Serial-to-TCP proxy for serial KISS modems, including MQTT tracing support. That is, a program which connects to a serial KISS modem, makes it available on a TCP port so it can continue to be used as normal by node software, and also outputs all the traffic between the node software and the modem to an MQTT host of your choosing, with various options.
+kissproxy is a serial-to-TCP proxy for serial KISS modems, including MQTT tracing support. That is, a program which connects to a serial KISS modem, makes it available on a TCP port so it can continue to be used as normal by node software, and optionally also outputs all the traffic between the node software and the modem to an MQTT host of your choosing, with various options.
 
 For a tool which can subscribe to these topics and produce Wireshark-readable output, see [Ax25Mqtt2pcap](https://github.com/M0LTE/Ax25Mqtt2pcap).
 
+kissproxylib is a .NET library version of the above, which can be used to integrate a KISS proxy with optional MQTT support into some other application.
+
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y8KFHA0)
 
-## Usage
+## kissproxy
+
+### Usage
 
 ```
 $ ./kissproxy
@@ -23,15 +27,14 @@ Options:
   -m, --mqtt-server <mqtt-server>     MQTT server to forward KISS frames to
   -mu, --mqtt-user <mqtt-user>        MQTT username
   -mp, --mqtt-pass <mqtt-pass>        MQTT password
-  -mt, --mqtt-topic <mqtt-topic>      MQTT topic
   --base64                            Publish base64 strings rather than raw bytes
   --version                           Show version information
   -?, -h, --help                      Show help and usage information
 ```
 
-## Topics
+### Topics
 
-This program outputs by default to a topics named as follows:
+This program outputs to a topic named as follows:
 
 ```
 kissproxy/$hostname/$comport/$direction
@@ -51,7 +54,7 @@ The KISS command represents the command byte unpacked from the KISS framing.
 
 The KISS port will always be port0 for single-port TNCs.
 
-## Windows usage
+### Windows usage
 
 Should just be a case of 
 
@@ -63,9 +66,9 @@ dotnet run
 
 assuming .NET 8 is installed. Then point LinBPQ at it as below. Awaiting feedback / demonstrated need, since it's not too common to run a packet node on Windows these days, let alone debug one.
 
-## Linux Build / Install
+### Linux Build / Install
 
-### Prerequisites
+#### Prerequisites
 .NET 8 SDK:
 ```
 curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel LTS
@@ -75,7 +78,7 @@ source ~/.bashrc
 dotnet --version
 ```
 
-### Build
+#### Build
 
 Tested on 32 bit Raspberry Pi OS Lite v11 on Raspberry Pi 2B rev 1.1.
 
@@ -85,7 +88,7 @@ cd kissproxy
 dotnet publish src/kissproxy.csproj --configuration Release -p:PublishProfile=src/Properties/PublishProfiles/Linux-arm32.pubxml
 ```
 
-### Install as systemd service
+#### Install as systemd service
 
 First stop LinBPQ to free up the modem port.
 
@@ -106,7 +109,7 @@ sudo systemctl enable kissproxy
 sudo systemctl start kissproxy
 ```
 
-### Configure linbpq (example)
+#### Configure linbpq (example)
 
 In your `bpq32.cfg`, find your KISS port of interest.
 
@@ -132,8 +135,6 @@ PORT
   ID=VHF
   TYPE=ASYNC
   PROTOCOL=KISS
-  ;COMPORT=/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0
-  ;SPEED=57600
   IPADDR=127.0.0.1
   TCPPORT=8910
   ...
@@ -144,7 +145,7 @@ This causes BPQ to connect to the modem via this program, rather than directly.
 
 Start up LinBPQ and check syslog to ensure kissproxy reports it has received a node connection, has connected to the modem, and has connected to your MQTT server.
 
-### Upgrade
+#### Upgrade
 
 ```
 cd kissproxy
@@ -155,7 +156,7 @@ sudo mv publish/* /opt/kissproxy/
 sudo systemctl start kissproxy
 ```
 
-### Multi-port
+#### Multi-port
 
 If you want to run more than one TNC, don't specify any command line parameters. Instead, place `/etc/kissproxy.conf` like this:
 
@@ -173,6 +174,36 @@ If you want to run more than one TNC, don't specify any command line parameters.
       "mqttServer": "mqtt"
   }
 ]
+```
+
+## kissproxylib
+
+A .NET library version of the above, which can be used to integrate a KISS proxy with optional MQTT support into some other application.
+
+```
+dotnet add package m0lte.kissproxylib
+```
+
+then simply:
+
+```
+var proxy = new KissProxy(new ConsoleLogger());
+await proxy.Run("/dev/tnc-port");
+```
+
+That will spin up a KISS proxy for the modem at `/dev/tnc-port`, on TCP port 8910, with the default serial baud rate of 57600, and no MQTT output.
+
+Optional parameters are available:
+
+```
+await proxy.Run("/dev/tnc-port", 
+    modemBaud: 57600, 
+    listenForNodeOnTcpPort: 8910, 
+    allowTcpConnectFromOtherHosts: false, 
+    mqttServer = "server", 
+    mqttUser = "user", 
+    mqttPassword = "password", 
+    emitFramesToMqttAsBase64String: false);
 ```
 
 ## Licence

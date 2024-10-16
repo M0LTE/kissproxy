@@ -41,6 +41,7 @@ internal class MockSerialPortFactory : ISerialPortFactory
 internal class FakeSerialPort : ISerialPort
 {
     public void Close() { }
+    public void DiscardInBuffer() { }
     public void Dispose() { }
     public void Open() { }
     public int ReadByte()

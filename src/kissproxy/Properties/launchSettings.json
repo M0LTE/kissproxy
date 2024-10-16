@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "kissproxy": {
+      "commandName": "Project",
+      "commandLineArgs": "-c com8 -m mqtt -mt wintest -a"
+    }
+  }
+}

@@ -6,7 +6,6 @@ using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Protocol;
 using NAx25;
 using System.Diagnostics;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -53,11 +52,21 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         }
 
         var messageBuilder = new MqttApplicationMessageBuilder()
-            .WithTopic(topic)
+            .WithTopic(BuildTopicName(topic))
             .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.ExactlyOnce)
             .WithPayload(payload);
 
         await mqttClient.EnqueueAsync(messageBuilder.Build());
+    }
+
+    private string BuildTopicName(string topic)
+    {
+        if (string.IsNullOrWhiteSpace(mqttTopicPrefix))
+        {
+            return topic;
+        }
+
+        return $"{mqttTopicPrefix}/{topic}";
     }
 
     private async Task SendBytesToMqttTopic(string topic, IList<byte> bytes, bool emitAsBase64String)
@@ -68,7 +77,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         }
 
         var messageBuilder = new MqttApplicationMessageBuilder()
-            .WithTopic(topic)
+            .WithTopic(BuildTopicName(topic))
             .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.ExactlyOnce);
 
         messageBuilder = emitAsBase64String
@@ -86,7 +95,10 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         string? mqttServer = null,
         string? mqttUsername = null,
         string? mqttPassword = null,
-        bool emitAsBase64String = false) => Run(modemComPort, CancellationToken.None, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUsername, mqttPassword, emitAsBase64String);
+        string? mqttTopicPrefix = null,
+        bool emitAsBase64String = false) => Run(modemComPort, CancellationToken.None, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUsername, mqttPassword, mqttTopicPrefix, emitAsBase64String);
+
+    private string? mqttTopicPrefix;
 
     public async Task Run(
         string modemComPort,
@@ -96,9 +108,11 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         bool allowTcpConnectFromOtherHosts = false,
         string? mqttServer = null, 
         string? mqttUsername = null, 
-        string? mqttPassword = null, 
+        string? mqttPassword = null,
+        string? mqttTopicPrefix = null,
         bool emitAsBase64String = false)
     {
+        this.mqttTopicPrefix = mqttTopicPrefix;
         using var scope = BeginLoggingScope();
         logger.LogDebug("Starting");
 
@@ -155,6 +169,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
                     logger.LogError("Could not open {comPort}: {reason}", modemComPort, ex.Message);
                     continue;
                 }
+                serialPort.DiscardInBuffer();
 
                 logger.LogInformation("Opened serial port {comPort}", modemComPort);
 
@@ -198,6 +213,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
                     }
                 });
 
+                bool modemToNodeThrew = false;
                 Task modemToNode = Task.Run(() =>
                 {
                     while (true)
@@ -210,6 +226,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
                         catch (Exception ex)
                         {
                             logger.LogError("Reading byte from modem blew up with \"{error}\", disconnecting node", ex.Message);
+                            modemToNodeThrew = true;
                             tcpClient.Close();
                             return;
                         }
@@ -240,12 +257,13 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
                 do
                 {
                     await Task.Delay(1000);
-                } while (!cancellationToken.IsCancellationRequested);
+                } while (!cancellationToken.IsCancellationRequested && !modemToNodeThrew);
 
-                tcpStream.Socket.Shutdown(SocketShutdown.Both);
-                serialPort.Close();
+                try { tcpStream.Socket.Shutdown(SocketShutdown.Both); }
+                catch (ObjectDisposedException) { }
 
-                //await Task.WhenAll(nodeToModem, modemToNode);
+                try { serialPort.Close(); }
+                catch (ObjectDisposedException) { }
             }
         }
         catch (Exception ex)
@@ -275,6 +293,16 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         {
             var (ax25Frame, portId, commandCode) = Unkiss(kissFrame);
             await SendBytesToMqttTopic($"{topic}/unframed/port{portId}/{commandCode}KissCmd", ax25Frame, emitAsBase64String);
+
+            static string ToNumbers(byte[] bytes) => string.Join(" ", bytes.Select(b => (int)b));
+
+            if (commandCode == KissCommandCode.Persistence || commandCode == KissCommandCode.SlotTime ||
+                commandCode == KissCommandCode.TxDelay || commandCode == KissCommandCode.TxTail ||
+                commandCode == KissCommandCode.FullDuplex)
+            {
+                logger.LogInformation("{command} set to {value}", commandCode, ToNumbers(ax25Frame));
+                return;
+            }
 
             if (commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode)
             {

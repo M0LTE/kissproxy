@@ -39,6 +39,9 @@ internal class Program
         var brokerPasswordOption = new Option<string?>("--mqtt-pass", "MQTT password");
         brokerPasswordOption.AddAlias("-mp");
 
+        var topicOption = new Option<string?>("--mqtt-topic-prefix", "MQTT topic prefix");
+        topicOption.AddAlias("-mt");
+
         var publishBase64Option = new Option<bool>("--base64", "Publish base64 strings rather than raw bytes");
 
         var rootCommand = new RootCommand("Serial-to-TCP proxy for serial KISS modems, including MQTT tracing support.");
@@ -49,6 +52,7 @@ internal class Program
         rootCommand.AddOption(brokerOption);
         rootCommand.AddOption(brokerUserOption);
         rootCommand.AddOption(brokerPasswordOption);
+        rootCommand.AddOption(topicOption);
         rootCommand.AddOption(publishBase64Option);
         rootCommand.SetHandler(async context =>
         {
@@ -80,7 +84,7 @@ internal class Program
                 foreach (var instance in config)
                 {
                     KissProxy proxy = new(instance.Id, new ConsoleLogger());
-                    tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.Base64)));
+                    tasks.Add(Task.Run(async () => await proxy.Run(instance.ComPort, instance.Baud, instance.TcpPort, instance.AnyHost, instance.MqttServer, instance.MqttUsername, instance.MqttPassword, instance.MqttTopicPrefix, instance.Base64)));
                 }
                 Task.WaitAll([.. tasks]);
             }
@@ -93,10 +97,11 @@ internal class Program
                 var mqttServer = context.ParseResult.GetValueForOption(brokerOption);
                 var mqttUser = context.ParseResult.GetValueForOption(brokerUserOption);
                 var mqttPassword = context.ParseResult.GetValueForOption(brokerPasswordOption);
+                var mqttTopicPrefix = context.ParseResult.GetValueForOption(topicOption);
                 var emitFramesToMqttAsBase64String = context.ParseResult.GetValueForOption(publishBase64Option);
 
                 await new KissProxy(new ConsoleLogger())
-                    .Run(modemComPort!, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUser, mqttPassword, emitFramesToMqttAsBase64String);
+                    .Run(modemComPort!, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUser, mqttPassword, mqttTopicPrefix, emitFramesToMqttAsBase64String);
             }
         });
 

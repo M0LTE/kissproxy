@@ -96,7 +96,7 @@ Note the modem COM port and MQTT server specified below - adjust as required bef
 
 ```
 sudo mkdir /opt/kissproxy
-sudo mv publish/* /opt/kissproxy/
+sudo mv src/publish/* /opt/kissproxy/
 sudo sh -c 'echo "[Unit]
 After=network.target
 [Service]
@@ -152,7 +152,7 @@ cd kissproxy
 git pull
 dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/kissproxy/Properties/PublishProfiles/Linux-arm32.pubxml
 sudo systemctl stop kissproxy
-sudo mv publish/* /opt/kissproxy/
+sudo mv src/publish/* /opt/kissproxy/
 sudo systemctl start kissproxy
 ```
 

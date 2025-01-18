@@ -80,12 +80,12 @@ dotnet --version
 
 #### Build
 
-Tested on 32 bit Raspberry Pi OS Lite v11 on Raspberry Pi 2B rev 1.1.
+Tested on 32 bit Raspberry Pi OS Lite v11 on Raspberry Pi 2B rev 1.1. Adjust publish profile for other platforms as required.
 
 ```
 git clone https://github.com/M0LTE/kissproxy.git
 cd kissproxy
-dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/Properties/PublishProfiles/Linux-arm32.pubxml
+dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/kissproxy/Properties/PublishProfiles/Linux-arm32.pubxml
 ```
 
 #### Install as systemd service

@@ -51,4 +51,6 @@ internal class FakeSerialPort : ISerialPort
     }
 
     public void Write(byte[] bytes, int v1, int v2) { }
+    public int BytesToRead => 0;
+    public int ReadTimeout { get; set; } = -1;
 }

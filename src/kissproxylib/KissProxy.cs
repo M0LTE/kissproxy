@@ -1,4 +1,5 @@
-﻿using CliWrap;
+using CliWrap;
+using kissproxy;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Client;
@@ -13,16 +14,36 @@ using static NAx25.KissFraming;
 
 namespace kissproxylib;
 
-public class KissProxy(string instance, ILogger logger, ISerialPortFactory serialPortFactory)
+public class KissProxy
 {
+    private readonly string instance;
+    private readonly ILogger logger;
+    private readonly ISerialPortFactory serialPortFactory;
     private readonly List<byte> inboundBufferData = [];
     private readonly List<byte> outboundBufferData = [];
+    private readonly AckModeTracker ackModeTracker = new();
     private IManagedMqttClient? mqttClient;
+    private string? mqttTopicPrefix;
+    private Config? currentConfig;
+    private ModemState? modemState;
+    private ISerialPort? activeSerialPort;
+    private Timer? parameterResendTimer;
+    private readonly object serialPortLock = new();
+    private NetworkStream? activeTcpStream;
+    private TcpClient? activeTcpClient;
+    private readonly object tcpLock = new();
 
     public KissProxy(ILogger logger) : this("", logger) { }
 
     public KissProxy(string instance, ILogger logger)
         : this(instance, logger, new SerialPortFactory()) { }
+
+    public KissProxy(string instance, ILogger logger, ISerialPortFactory serialPortFactory)
+    {
+        this.instance = instance;
+        this.logger = logger;
+        this.serialPortFactory = serialPortFactory;
+    }
 
     private Task MqttClient_ConnectedAsync(MqttClientConnectedEventArgs arg)
     {
@@ -30,7 +51,10 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         return Task.CompletedTask;
     }
 
-    private IDisposable? BeginLoggingScope() => !string.IsNullOrWhiteSpace(instance) ? logger.BeginScope(new Dictionary<string, object>() { { "instance", instance } }) : null;
+    private IDisposable? BeginLoggingScope() =>
+        !string.IsNullOrWhiteSpace(instance)
+            ? logger.BeginScope(new Dictionary<string, object>() { { "instance", instance } })
+            : null;
 
     private Task MqttClient_DisconnectedAsync(MqttClientDisconnectedEventArgs arg)
     {
@@ -47,9 +71,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
     private async Task EnqueueString(string topic, string? payload)
     {
         if (mqttClient == null || payload == null)
-        {
             return;
-        }
 
         var messageBuilder = new MqttApplicationMessageBuilder()
             .WithTopic(BuildTopicName(topic))
@@ -62,9 +84,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
     private string BuildTopicName(string topic)
     {
         if (string.IsNullOrWhiteSpace(mqttTopicPrefix))
-        {
             return topic;
-        }
 
         return $"{mqttTopicPrefix}/{topic}";
     }
@@ -72,9 +92,7 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
     private async Task SendBytesToMqttTopic(string topic, IList<byte> bytes, bool emitAsBase64String)
     {
         if (mqttClient == null)
-        {
             return;
-        }
 
         var messageBuilder = new MqttApplicationMessageBuilder()
             .WithTopic(BuildTopicName(topic))
@@ -87,6 +105,66 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         await mqttClient.EnqueueAsync(messageBuilder.Build());
     }
 
+    /// <summary>
+    /// Publishes ACKMODE timing information to MQTT.
+    /// Topic: kissproxy/{machine}/{instance}/timing/ackmode
+    /// </summary>
+    private async Task PublishAckModeTiming(AckModeTiming timing)
+    {
+        var topic = $"kissproxy/{LastDelimitation(Environment.MachineName, '/')}/{instance}/timing/ackmode";
+
+        logger.LogDebug("ACKMODE timing: seq=0x{SeqHi:X2}{SeqLo:X2}, total={TotalMs:F1}ms, txDuration={TxDurationMs:F1}ms, txDelay={TxDelayMs:F0}ms",
+            timing.SeqHi, timing.SeqLo, timing.TotalMs, timing.TxDurationMs ?? 0, timing.TxDelayMs ?? 0);
+
+        await EnqueueString(topic, timing.ToJson());
+    }
+
+    /// <summary>
+    /// Runs the proxy with the specified Config and GlobalConfig objects.
+    /// MQTT settings come from GlobalConfig, per-modem settings from Config.
+    /// </summary>
+    public Task Run(Config config, GlobalConfig globalConfig, ModemState state, CancellationToken cancellationToken = default)
+    {
+        currentConfig = config;
+        modemState = state;
+        return Run(
+            config.ComPort,
+            cancellationToken,
+            config.Baud,
+            config.TcpPort,
+            config.AnyHost,
+            globalConfig.MqttServer,
+            globalConfig.MqttUsername,
+            globalConfig.MqttPassword,
+            config.MqttTopicPrefix,
+            config.Base64);
+    }
+
+    /// <summary>
+    /// Runs the proxy with the specified Config object.
+    /// For backwards compatibility when GlobalConfig is not available.
+    /// </summary>
+    [Obsolete("Use Run(Config, GlobalConfig, ModemState, CancellationToken) instead")]
+    public Task Run(Config config, ModemState state, CancellationToken cancellationToken = default)
+    {
+        currentConfig = config;
+        modemState = state;
+        return Run(
+            config.ComPort,
+            cancellationToken,
+            config.Baud,
+            config.TcpPort,
+            config.AnyHost,
+            null,  // No MQTT without GlobalConfig
+            null,
+            null,
+            config.MqttTopicPrefix,
+            config.Base64);
+    }
+
+    /// <summary>
+    /// Original Run method for backwards compatibility.
+    /// </summary>
     public Task Run(
         string modemComPort,
         int modemSerialBaud = 57600,
@@ -96,18 +174,18 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         string? mqttUsername = null,
         string? mqttPassword = null,
         string? mqttTopicPrefix = null,
-        bool emitAsBase64String = false) => Run(modemComPort, CancellationToken.None, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUsername, mqttPassword, mqttTopicPrefix, emitAsBase64String);
-
-    private string? mqttTopicPrefix;
+        bool emitAsBase64String = false) =>
+        Run(modemComPort, CancellationToken.None, modemSerialBaud, listenForNodeOnTcpPort,
+            allowTcpConnectFromOtherHosts, mqttServer, mqttUsername, mqttPassword, mqttTopicPrefix, emitAsBase64String);
 
     public async Task Run(
         string modemComPort,
         CancellationToken cancellationToken,
-        int modemSerialBaud = 57600, 
+        int modemSerialBaud = 57600,
         int listenForNodeOnTcpPort = 8910,
         bool allowTcpConnectFromOtherHosts = false,
-        string? mqttServer = null, 
-        string? mqttUsername = null, 
+        string? mqttServer = null,
+        string? mqttUsername = null,
         string? mqttPassword = null,
         string? mqttTopicPrefix = null,
         bool emitAsBase64String = false)
@@ -140,140 +218,576 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
 
         try
         {
-            while (true)
+            // Open serial port immediately at startup
+            while (!cancellationToken.IsCancellationRequested)
             {
-                using TcpListener tcpListener = new(allowTcpConnectFromOtherHosts ? IPAddress.Any : IPAddress.Loopback, listenForNodeOnTcpPort);
+                ISerialPort? serialPort = null;
                 try
                 {
-                    tcpListener.Start();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError("Failed to start TCP listener: {reason}", ex.Message);
-                    return;
-                }
-
-                logger.LogInformation("Awaiting node connection on port {port}", listenForNodeOnTcpPort);
-
-                using var tcpClient = tcpListener.AcceptTcpClient();
-                using var tcpStream = tcpClient.GetStream();
-                logger.LogInformation("Accepted TCP node connection on port {port}", listenForNodeOnTcpPort);
-
-                using ISerialPort serialPort = serialPortFactory.Create(modemComPort, modemSerialBaud);
-                try
-                {
+                    serialPort = serialPortFactory.Create(modemComPort, modemSerialBaud);
                     serialPort.Open();
+                    serialPort.ReadTimeout = 1000; // 1 second timeout for graceful shutdown
+                    serialPort.DiscardInBuffer();
+
+                    lock (serialPortLock)
+                    {
+                        activeSerialPort = serialPort;
+                    }
+
+                    if (modemState != null)
+                        modemState.SerialOpen = true;
+
+                    logger.LogInformation("Opened serial port {comPort}", modemComPort);
+
+                    // Send configured parameters to modem on connect
+                    await SendConfiguredParametersAsync(serialPort);
+
+                    // Start periodic parameter resend timer if configured
+                    StartParameterResendTimer(serialPort);
+
+                    // Clear buffers
+                    inboundBufferData.Clear();
+                    outboundBufferData.Clear();
+
+                    // Start serial reader task (reads from modem, forwards to TCP if connected)
+                    var serialCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    var serialReaderTask = Task.Run(() => RunSerialReader(serialPort, emitAsBase64String, serialCts.Token));
+
+                    // Run TCP listener loop (accepts connections, bridges to serial)
+                    await RunTcpListenerLoop(serialPort, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, emitAsBase64String, cancellationToken);
+
+                    // Cancel serial reader when TCP loop exits
+                    serialCts.Cancel();
+                    try { await serialReaderTask; } catch { }
                 }
                 catch (Exception ex)
                 {
                     logger.LogError("Could not open {comPort}: {reason}", modemComPort, ex.Message);
+                    if (modemState != null)
+                        modemState.SerialOpen = false;
+
+                    // Wait before retrying
+                    await Task.Delay(5000, cancellationToken);
                     continue;
                 }
-                serialPort.DiscardInBuffer();
-
-                logger.LogInformation("Opened serial port {comPort}", modemComPort);
-
-                Task nodeToModem = Task.Run(() =>
+                finally
                 {
-                    List<byte> buffer = [];
-                    while (true)
+                    StopParameterResendTimer();
+
+                    lock (serialPortLock)
                     {
-                        int read;
-                        try
-                        {
-                            read = tcpStream.ReadByte();
-                        }
-                        catch (Exception)
-                        {
-                            logger.LogError("Node disconnected (read threw), closing serial port");
-                            serialPort.Close();
-                            return;
-                        }
-
-                        if (read < 0)
-                        {
-                            logger.LogError("Node disconnected (read returned {read}), closing serial port", read);
-                            serialPort.Close();
-                            break;
-                        }
-
-                        var b = (byte)read;
-                        ProcessByte(outboundBufferData, true, b, emitAsBase64String);
-
-                        try
-                        {
-                            serialPort.Write([b], 0, 1);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogError("Writing byte to modem blew up with \"{error}\", closing serial port", ex.Message);
-                            serialPort.Close();
-                            break;
-                        }
+                        activeSerialPort = null;
                     }
-                });
 
-                bool modemToNodeThrew = false;
-                Task modemToNode = Task.Run(() =>
-                {
-                    while (true)
+                    lock (tcpLock)
                     {
-                        int read;
-                        try
-                        {
-                            read = serialPort.ReadByte();
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogError("Reading byte from modem blew up with \"{error}\", disconnecting node", ex.Message);
-                            modemToNodeThrew = true;
-                            tcpClient.Close();
-                            return;
-                        }
-
-                        if (read < 0)
-                        {
-                            logger.LogError("modem read returned {read}, disconnecting node", read);
-                            tcpClient.Close();
-                            return;
-                        }
-
-                        var b = (byte)read;
-                        ProcessByte(inboundBufferData, false, b, emitAsBase64String);
-
-                        try
-                        {
-                            tcpStream.WriteByte((byte)read);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogError("Writing byte to node blew up with \"{error}\", disconnecting node", ex.Message);
-                            tcpClient.Close();
-                            return;
-                        }
+                        activeTcpClient = null;
+                        activeTcpStream = null;
                     }
-                });
 
-                do
-                {
-                    await Task.Delay(1000);
-                } while (!cancellationToken.IsCancellationRequested && !modemToNodeThrew);
+                    try { serialPort?.Close(); }
+                    catch { }
 
-                try { tcpStream.Socket.Shutdown(SocketShutdown.Both); }
-                catch (ObjectDisposedException) { }
-
-                try { serialPort.Close(); }
-                catch (ObjectDisposedException) { }
+                    if (modemState != null)
+                    {
+                        modemState.SerialOpen = false;
+                        modemState.NodeConnected = false;
+                    }
+                }
             }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Top level exception handled");
         }
+        finally
+        {
+            StopParameterResendTimer();
+        }
+    }
+
+    private async Task<TcpClient?> AcceptTcpClientAsync(TcpListener listener, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await listener.AcceptTcpClientAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("Error accepting TCP connection: {error}", ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Runs the TCP listener loop, accepting connections and bridging to serial.
+    /// Serial port stays open between TCP connections.
+    /// </summary>
+    private async Task RunTcpListenerLoop(
+        ISerialPort serialPort,
+        int tcpPort,
+        bool allowExternalConnections,
+        bool emitAsBase64String,
+        CancellationToken cancellationToken)
+    {
+        using TcpListener tcpListener = new(allowExternalConnections ? IPAddress.Any : IPAddress.Loopback, tcpPort);
+        try
+        {
+            tcpListener.Start();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("Failed to start TCP listener: {reason}", ex.Message);
+            return;
+        }
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            if (modemState != null)
+                modemState.NodeConnected = false;
+
+            logger.LogInformation("Awaiting node connection on port {port}", tcpPort);
+
+            using var tcpClient = await AcceptTcpClientAsync(tcpListener, cancellationToken);
+            if (tcpClient == null)
+                continue;
+
+            using var tcpStream = tcpClient.GetStream();
+            tcpStream.ReadTimeout = 1000; // 1 second timeout for graceful shutdown
+            logger.LogInformation("Accepted TCP node connection on port {port}", tcpPort);
+
+            // Register the TCP connection so serial reader can forward to it
+            lock (tcpLock)
+            {
+                activeTcpClient = tcpClient;
+                activeTcpStream = tcpStream;
+            }
+
+            if (modemState != null)
+                modemState.NodeConnected = true;
+
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            // Run node-to-modem (reads from TCP, writes to serial)
+            Task nodeToModem = Task.Run(() => RunNodeToModem(tcpStream, serialPort, emitAsBase64String, cts));
+
+            // Wait for node to disconnect or cancellation
+            while (!cancellationToken.IsCancellationRequested && !nodeToModem.IsCompleted)
+            {
+                await Task.Delay(500, CancellationToken.None);
+            }
+
+            cts.Cancel();
+
+            // Unregister TCP connection
+            lock (tcpLock)
+            {
+                activeTcpClient = null;
+                activeTcpStream = null;
+            }
+
+            try { tcpStream.Socket.Shutdown(SocketShutdown.Both); }
+            catch { }
+
+            if (modemState != null)
+                modemState.NodeConnected = false;
+
+            logger.LogInformation("Node disconnected, serial port remains open");
+        }
+    }
+
+    /// <summary>
+    /// Reads from serial port continuously, forwarding to TCP if connected.
+    /// Updates stats and publishes to MQTT regardless of TCP connection.
+    /// </summary>
+    private void RunSerialReader(ISerialPort serialPort, bool emitAsBase64String, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            int read;
+            try
+            {
+                read = serialPort.ReadByte();
+            }
+            catch (TimeoutException)
+            {
+                // Timeout allows us to check cancellation token periodically
+                continue;
+            }
+            catch (Exception ex)
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                    logger.LogError("Reading byte from modem blew up with \"{error}\"", ex.Message);
+                return;
+            }
+
+            if (read < 0)
+            {
+                logger.LogError("Modem read returned {read}", read);
+                return;
+            }
+
+            var b = (byte)read;
+
+            // Process for frame detection, stats, MQTT
+            ProcessByte(inboundBufferData, false, b, emitAsBase64String);
+
+            // Forward to TCP if connected
+            NetworkStream? tcpStream;
+            TcpClient? tcpClient;
+            lock (tcpLock)
+            {
+                tcpStream = activeTcpStream;
+                tcpClient = activeTcpClient;
+            }
+
+            if (tcpStream != null && tcpClient != null)
+            {
+                try
+                {
+                    tcpStream.WriteByte(b);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("Writing byte to node failed: \"{error}\"", ex.Message);
+                    // Don't return - keep reading from serial even if TCP write fails
+                    // The TCP connection will be closed by the listener loop
+                    lock (tcpLock)
+                    {
+                        activeTcpStream = null;
+                        activeTcpClient = null;
+                    }
+                    try { tcpClient.Close(); }
+                    catch { }
+                }
+            }
+        }
+    }
+
+    private void RunNodeToModem(NetworkStream tcpStream, ISerialPort serialPort, bool emitAsBase64String, CancellationTokenSource cts)
+    {
+        List<byte> frameBuffer = [];
+
+        while (!cts.Token.IsCancellationRequested)
+        {
+            int read;
+            try
+            {
+                read = tcpStream.ReadByte();
+            }
+            catch (IOException ex) when (ex.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut)
+            {
+                // Timeout allows us to check cancellation token periodically
+                continue;
+            }
+            catch (Exception)
+            {
+                logger.LogInformation("Node disconnected (read threw)");
+                return;
+            }
+
+            if (read < 0)
+            {
+                logger.LogInformation("Node disconnected (read returned {read})", read);
+                return;
+            }
+
+            var b = (byte)read;
+
+            // Buffer the byte for frame detection
+            bool frameComplete = BufferByteForFiltering(frameBuffer, b);
+
+            if (frameComplete && frameBuffer.Count > 0)
+            {
+                var frame = frameBuffer.ToArray();
+                frameBuffer.Clear();
+
+                // Check if frame should be filtered
+                if (ShouldFilterFrame(frame))
+                {
+                    logger.LogDebug("Filtered frame from node");
+                    modemState?.RecordFilteredFrame();
+                    continue;
+                }
+
+                // Forward the frame to modem
+                try
+                {
+                    serialPort.Write(frame, 0, frame.Length);
+                    ProcessOutboundFrame(frame, emitAsBase64String);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError("Writing frame to modem failed: \"{error}\"", ex.Message);
+                    return;
+                }
+            }
+            else if (!frameComplete)
+            {
+                // Still accumulating frame, don't forward yet
+            }
+        }
+    }
+
+    /// <summary>
+    /// Buffers bytes until a complete frame is detected.
+    /// Returns true when a complete frame is ready in the buffer.
+    /// </summary>
+    private static bool BufferByteForFiltering(List<byte> buffer, byte b)
+    {
+        const byte FEND = KissFrameBuilder.FEND;
+
+        // Discard repeated FENDs
+        if (b == FEND && buffer.Count > 0 && buffer[^1] == FEND)
+            return false;
+
+        buffer.Add(b);
+
+        // Check if we have a complete frame (ends with FEND, has content)
+        if (b == FEND && buffer.Count > 2)
+        {
+            // Frame is complete if it starts with FEND and ends with FEND
+            if (buffer[0] == FEND)
+                return true;
+
+            // Or if it just ends with FEND (missing leading FEND)
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if a frame from the node should be filtered based on config.
+    /// </summary>
+    private bool ShouldFilterFrame(byte[] frame)
+    {
+        if (currentConfig == null)
+            return false;
+
+        var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+        if (!cmdByte.HasValue)
+            return false;
+
+        var (command, _) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+
+        // Data frames always pass through
+        if (command == KissFrameBuilder.CMD_DATAFRAME)
+            return false;
+
+        return KissFrameBuilder.ShouldFilter(command, currentConfig);
+    }
+
+    private void ProcessOutboundFrame(byte[] frame, bool emitAsBase64String)
+    {
+        // Record in state
+        var frameInfo = CreateFrameInfo(frame, outbound: true);
+        modemState?.RecordFrameToModem(frame, frameInfo);
+
+        // Track outbound ACKMODE frames for timing
+        var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+        if (cmdByte.HasValue)
+        {
+            var (cmd, _) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+
+            // Track ACKMODE frames for timing calculation
+            if (cmd == KissFrameBuilder.CMD_ACKMODE)
+            {
+                ackModeTracker.TrackOutbound(frame);
+            }
+            // Update tracker when parameters change
+            else if (cmd == KissFrameBuilder.CMD_TXDELAY && frame.Length >= 4)
+            {
+                int valueIdx = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
+                if (valueIdx < frame.Length - 1)
+                    ackModeTracker.SetTxDelay(frame[valueIdx]);
+            }
+            else if (cmd == KissFrameBuilder.CMD_SETHW && frame.Length >= 4)
+            {
+                int valueIdx = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
+                if (valueIdx < frame.Length - 1)
+                {
+                    // Mode value: if >= 16, subtract 16 (temporary mode)
+                    int modeValue = frame[valueIdx];
+                    int mode = modeValue >= 16 ? modeValue - 16 : modeValue;
+                    ackModeTracker.SetMode(mode);
+                }
+            }
+        }
+
+        // Process for MQTT
+        Task.Run(async () => await ProcessFrame(outbound: true, frame, emitAsBase64String));
+    }
+
+    /// <summary>
+    /// Sends all configured parameters to the modem.
+    /// </summary>
+    private async Task SendConfiguredParametersAsync(ISerialPort serialPort)
+    {
+        if (currentConfig == null)
+            return;
+
+        // Initialize AckModeTracker with configured values
+        if (currentConfig.NinoMode.HasValue)
+            ackModeTracker.SetMode(currentConfig.NinoMode.Value);
+        if (currentConfig.TxDelayValue.HasValue)
+            ackModeTracker.SetTxDelay(currentConfig.TxDelayValue.Value);
+
+        var frames = KissFrameBuilder.BuildAllParameterFrames(currentConfig);
+        foreach (var frame in frames)
+        {
+            try
+            {
+                serialPort.Write(frame, 0, frame.Length);
+                var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+                if (cmdByte.HasValue)
+                {
+                    var (cmd, _) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+                    logger.LogInformation("Sent {command} to modem", KissFrameBuilder.GetCommandName(cmd));
+                }
+
+                // Small delay between parameter sends
+                await Task.Delay(50);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError("Error sending parameter to modem: {error}", ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sends configured parameters to the modem synchronously (for timer callback).
+    /// </summary>
+    public void SendConfiguredParameters()
+    {
+        ISerialPort? serialPort;
+        lock (serialPortLock)
+        {
+            serialPort = activeSerialPort;
+        }
+
+        if (serialPort == null || currentConfig == null)
+            return;
+
+        var frames = KissFrameBuilder.BuildAllParameterFrames(currentConfig);
+        foreach (var frame in frames)
+        {
+            try
+            {
+                serialPort.Write(frame, 0, frame.Length);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError("Error sending parameter to modem: {error}", ex.Message);
+                return; // Stop if serial port is gone
+            }
+        }
+
+        logger.LogDebug("Periodic parameter resend completed");
+    }
+
+    private void StartParameterResendTimer(ISerialPort serialPort)
+    {
+        if (currentConfig == null || currentConfig.ParameterSendInterval <= 0)
+            return;
+
+        var interval = TimeSpan.FromSeconds(currentConfig.ParameterSendInterval);
+        parameterResendTimer = new Timer(_ => SendConfiguredParameters(), null, interval, interval);
+        logger.LogInformation("Started parameter resend timer with {interval}s interval", currentConfig.ParameterSendInterval);
+    }
+
+    private void StopParameterResendTimer()
+    {
+        parameterResendTimer?.Dispose();
+        parameterResendTimer = null;
+    }
+
+    /// <summary>
+    /// Called when config changes. Resends parameters to modem if connected.
+    /// </summary>
+    public void OnConfigChanged(Config newConfig)
+    {
+        currentConfig = newConfig;
+        SendConfiguredParameters();
+
+        // Restart timer if interval changed
+        StopParameterResendTimer();
+        ISerialPort? serialPort;
+        lock (serialPortLock)
+        {
+            serialPort = activeSerialPort;
+        }
+        if (serialPort != null)
+        {
+            StartParameterResendTimer(serialPort);
+        }
+    }
+
+    private FrameInfo? CreateFrameInfo(byte[] frame, bool outbound)
+    {
+        var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+        if (!cmdByte.HasValue)
+            return null;
+
+        var (command, port) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+
+        // Create hex and ASCII dumps
+        var (hexDump, asciiDump) = FrameInfo.CreateDumps(frame);
+
+        var info = new FrameInfo
+        {
+            Timestamp = DateTime.UtcNow,
+            CommandCode = command,
+            CommandName = KissFrameBuilder.GetCommandName(command),
+            Port = port,
+            PayloadLength = Math.Max(0, frame.Length - 3), // Subtract FEND, cmd, FEND
+            HexDump = hexDump,
+            AsciiDump = asciiDump
+        };
+
+        // For parameter frames, extract the value
+        if (command != KissFrameBuilder.CMD_DATAFRAME && frame.Length >= 4)
+        {
+            int valueIdx = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
+            if (valueIdx < frame.Length - 1)
+            {
+                info.ParameterValue = frame[valueIdx];
+            }
+        }
+
+        return info;
     }
 
     private void ProcessByte(List<byte> buffer, bool outbound, byte b, bool emitAsBase64String)
-        => KissHelpers.ProcessBuffer(buffer, b, frame => Task.Run(async () => await ProcessFrame(outbound, frame, emitAsBase64String)));
+    {
+        KissHelpers.ProcessBuffer(buffer, b, frame =>
+        {
+            // Record in state
+            if (!outbound && modemState != null)
+            {
+                var frameInfo = CreateFrameInfo(frame, outbound: false);
+                modemState.RecordFrameFromModem(frame, frameInfo);
+            }
+
+            // Check for ACKMODE ACK from modem (inbound)
+            if (!outbound)
+            {
+                var timing = ackModeTracker.ProcessAck(frame);
+                if (timing != null)
+                {
+                    // Publish timing info to MQTT
+                    Task.Run(async () => await PublishAckModeTiming(timing));
+                }
+            }
+
+            Task.Run(async () => await ProcessFrame(outbound, frame, emitAsBase64String));
+        });
+    }
 
     private static string LastDelimitation(string topic, char delimiter)
     {
@@ -330,14 +844,10 @@ public class KissProxy(string instance, ILogger logger, ISerialPortFactory seria
         const string prog = "/opt/ax2txt/ax2txt";
 
         if (!File.Exists(prog))
-        {
             return null;
-        }
 
         if (frame == null || frame.Length == 0)
-        {
             return null;
-        }
 
         try
         {

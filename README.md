@@ -1,133 +1,160 @@
 # kissproxy / kissproxylib
 
-kissproxy is a serial-to-TCP proxy for serial KISS modems, including MQTT tracing support. That is, a program which connects to a serial KISS modem, makes it available on a TCP port so it can continue to be used as normal by node software, and optionally also outputs all the traffic between the node software and the modem to an MQTT host of your choosing, with various options.
+kissproxy is a serial-to-TCP proxy for serial KISS modems with a **web-based management interface**, KISS parameter filtering/override, NinoTNC mode control, and MQTT tracing support.
 
-For a tool which can subscribe to these topics and produce Wireshark-readable output, see [Ax25Mqtt2pcap](https://github.com/M0LTE/Ax25Mqtt2pcap).
+Connect your serial KISS modem, make it available on a TCP port for node software, and manage everything through a modern web UI - including real-time statistics, NinoTNC status monitoring, and KISS parameter control.
 
-kissproxylib is a .NET library version of the above, which can be used to integrate a KISS proxy with optional MQTT support into some other application.
+For a tool which can subscribe to MQTT topics and produce Wireshark-readable output, see [Ax25Mqtt2pcap](https://github.com/M0LTE/Ax25Mqtt2pcap).
+
+kissproxylib is a .NET library version which can be used to integrate a KISS proxy into other applications.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y8KFHA0)
 
-## kissproxy
+## Features
 
-### Usage
+### Web Management Interface
+- **Password-protected web UI** for configuration and monitoring
+- **Real-time statistics**: frame counts, bytes transferred, connection status
+- **Live frame activity**: see last frames to/from modem with hex and ASCII dumps
+- **NinoTNC status panel**: firmware version, mode, uptime, packet counts (from TX Test frames)
+- **Full configuration editing**: all settings editable via the browser - no config files to edit
+- **Multi-modem support**: manage multiple TNCs from a single interface
 
-```
-$ ./kissproxy
-Description:
-  
-Usage:
-  kissproxy [options]
+### KISS Parameter Control
+- **Filter commands from node**: block TxDelay, Persistence, SlotTime, TxTail, FullDuplex, or SetHardware commands
+- **Override parameter values**: send your own values to the modem instead of (or in addition to) what the node sends
+- **Periodic parameter refresh**: optionally resend parameters at configurable intervals
 
-Options:
-  -c, --comport <comport> (REQUIRED)  The COM port the modem is connected to, e.g. /dev/ttyACM0
-  -b, --baud <baud>                   The baud rate of the modem [default: 57600]
-  -p, --tcpport <tcpport>             The TCP port to listen on [default: 8910]
-  -a, --anyhost                       Whether to accept connections from any host, instead of just localhost [default: False]
-  -m, --mqtt-server <mqtt-server>     MQTT server to forward KISS frames to
-  -mu, --mqtt-user <mqtt-user>        MQTT username
-  -mp, --mqtt-pass <mqtt-pass>        MQTT password
-  --base64                            Publish base64 strings rather than raw bytes
-  --version                           Show version information
-  -?, -h, --help                      Show help and usage information
-```
+### NinoTNC Support
+- **Mode selection**: set any of the 16 NinoTNC modes (0-15) via the web UI
+- **Software control detection**: when DIP switches are set to 1111, shows actual operating mode decoded from firmware
+- **TX Test frame parsing**: automatically extracts and displays NinoTNC status information
+- **Persist to flash option**: choose whether mode changes are temporary or saved to TNC flash
 
-### Topics
+### MQTT Integration
+- **Frame tracing**: publish all KISS traffic to MQTT topics
+- **Multiple topic formats**: framed, unframed, and decoded (with ax2txt)
+- **Per-modem topics**: organized by hostname, port, and direction
 
-This program outputs to a topic named as follows:
+## Quick Start
 
-```
-kissproxy/$hostname/$comport/$direction
-```
+### Prerequisites
+- .NET 8 SDK or later
 
-`$direction` can be `toModem` or `fromModem`.
+### Build and Run
 
-Under that topic are further sub-topics:
-
-`/framed` - the payload is the raw traffic between the node and the modem, with its KISS framing intact.
-
-`/unframed/$kissport/$kisscommand` - for these topics, the MQTT payload is the unpacked/unescaped frame, normally but not necessarily AX.25, separated by TNC port and KISS command id.
-
-The KISS command represents the command byte unpacked from the KISS framing.
-
-`/decoded/$kissport` - the payload is a human-readable representation. Requires ax2txt (https://github.com/Online-Amateur-Radio-Club-M0OUK/ax2txt) binary to be present at /opt/ax2txt/ax2txt.
-
-The KISS port will always be port0 for single-port TNCs.
-
-### Windows usage
-
-Should just be a case of 
-
-```
+```bash
 git clone https://github.com/M0LTE/kissproxy.git
-cd kissproxy\src\kissproxy
+cd kissproxy/src/kissproxy
 dotnet run
 ```
 
-assuming .NET 8 is installed. Then point LinBPQ at it as below. Awaiting feedback / demonstrated need, since it's not too common to run a packet node on Windows these days, let alone debug one.
+On first run, you'll be prompted to set a password. Then access the web UI at `http://localhost:8080` and configure everything from there - add modems, set serial ports, configure KISS parameters, and more. All configuration is done through the browser.
 
-### Linux Build / Install
+## Configuration Options
 
-#### Prerequisites
-.NET 8 SDK:
+All options are configurable via the web UI:
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `webPort` | Port for the web management interface | 8080 |
+| `password` | Password for web UI authentication | (set on first run) |
+| `id` | Unique identifier for each modem | (required) |
+| `comPort` | Serial port path | (required) |
+| `baud` | Serial baud rate | 57600 |
+| `tcpPort` | TCP port for node connections | 8910 |
+| `anyHost` | Accept connections from any host | false |
+| `mqttServer` | MQTT server (host:port) | null |
+| `mqttUsername` | MQTT username | null |
+| `mqttPassword` | MQTT password | null |
+| `mqttTopicPrefix` | Custom MQTT topic prefix | null |
+| `base64` | Publish as base64 instead of raw bytes | false |
+| `filterTxDelay` | Block TxDelay commands from node | false |
+| `filterPersistence` | Block Persistence commands from node | false |
+| `filterSlotTime` | Block SlotTime commands from node | false |
+| `filterTxTail` | Block TxTail commands from node | false |
+| `filterFullDuplex` | Block FullDuplex commands from node | false |
+| `filterSetHardware` | Block SetHardware commands from node | false |
+| `txDelayValue` | Override TxDelay value (10ms units) | null |
+| `persistenceValue` | Override Persistence value (0-255) | null |
+| `slotTimeValue` | Override SlotTime value (10ms units) | null |
+| `txTailValue` | Override TxTail value (10ms units) | null |
+| `fullDuplexValue` | Override FullDuplex (true/false) | null |
+| `ninoMode` | NinoTNC mode to set (0-14) | null |
+| `persistNinoMode` | Save mode to TNC flash memory | false |
+| `parameterSendInterval` | Resend parameters every N seconds (0=on connect only) | 0 |
+
+## NinoTNC Modes
+
+| Mode | DIP Switches | Description |
+|------|--------------|-------------|
+| 0 | 0000 | 9600 GFSK AX.25 |
+| 1 | 0001 | 19200 4FSK |
+| 2 | 0010 | 9600 GFSK IL2P+CRC |
+| 3 | 0011 | 9600 4FSK |
+| 4 | 0100 | 4800 GFSK IL2P+CRC |
+| 5 | 0101 | 3600 QPSK IL2P+CRC |
+| 6 | 0110 | 1200 AFSK AX.25 |
+| 7 | 0111 | 1200 AFSK IL2P+CRC |
+| 8 | 1000 | 300 BPSK IL2P+CRC |
+| 9 | 1001 | 600 QPSK IL2P+CRC |
+| 10 | 1010 | 1200 BPSK IL2P+CRC |
+| 11 | 1011 | 2400 QPSK IL2P+CRC |
+| 12 | 1100 | 300 AFSK AX.25 |
+| 13 | 1101 | 300 AFSKPLL IL2P |
+| 14 | 1110 | 300 AFSKPLL IL2P+CRC |
+| 15 | 1111 | Set from KISS (software control) |
+
+When DIP switches are set to 1111, the TNC accepts mode changes via KISS SETHW commands. The web UI will show "(via KISS = X / XXXX)" to indicate software-controlled mode.
+
+## MQTT Topics
+
+Traffic is published to topics named:
+
 ```
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel LTS
-echo 'export DOTNET_ROOT=$HOME/.dotnet' >> ~/.bashrc
-echo 'export PATH=$PATH:$HOME/.dotnet' >> ~/.bashrc
-source ~/.bashrc
-dotnet --version
+kissproxy/$hostname/$id/$direction
 ```
 
-#### Build
+Where `$direction` is `toModem` or `fromModem`.
 
-Tested on 32 bit Raspberry Pi OS Lite v11 on Raspberry Pi 2B rev 1.1. Adjust publish profile for other platforms as required.
+Sub-topics:
+- `/framed` - Raw KISS traffic with framing intact
+- `/unframed/$kissport/$kisscommand` - Unpacked frame data
+- `/decoded/$kissport` - Human-readable (requires ax2txt at /opt/ax2txt/ax2txt)
 
-```
+## Linux Installation
+
+### Install as systemd service
+
+```bash
+# Build
 git clone https://github.com/M0LTE/kissproxy.git
 cd kissproxy
 dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/kissproxy/Properties/PublishProfiles/Linux-arm32.pubxml
-```
 
-#### Install as systemd service
-
-First stop LinBPQ to free up the modem port.
-
-Note the modem COM port and MQTT server specified below - adjust as required before running.
-
-```
-sudo mkdir /opt/kissproxy
+# Install
+sudo mkdir -p /opt/kissproxy
 sudo mv src/publish/* /opt/kissproxy/
+
+# Create service
 sudo sh -c 'echo "[Unit]
 After=network.target
 [Service]
-ExecStart=/opt/kissproxy/kissproxy --comport /dev/ttyACM0 --mqtt-server myhost
+ExecStart=/opt/kissproxy/kissproxy
 WorkingDirectory=/opt/kissproxy
 Restart=always
 [Install]
 WantedBy=multi-user.target" > /etc/systemd/system/kissproxy.service'
+
 sudo systemctl enable kissproxy
 sudo systemctl start kissproxy
 ```
 
-#### Configure linbpq (example)
+Then access the web UI to set up your password and configure modems.
 
-In your `bpq32.cfg`, find your KISS port of interest.
+### Configure LinBPQ
 
-Change from like this:
-
-```
-PORT
-  PORTNUM=1
-  ID=VHF
-  TYPE=ASYNC
-  PROTOCOL=KISS
-  COMPORT=/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0
-  SPEED=57600
-  ...
-ENDPORT
-```
-
-to this:
+In your `bpq32.cfg`, change your KISS port from direct serial:
 
 ```
 PORT
@@ -141,70 +168,32 @@ PORT
 ENDPORT
 ```
 
-This causes BPQ to connect to the modem via this program, rather than directly.
-
-Start up LinBPQ and check syslog to ensure kissproxy reports it has received a node connection, has connected to the modem, and has connected to your MQTT server.
-
-#### Upgrade
-
-```
-cd kissproxy
-git pull
-dotnet publish src/kissproxy/kissproxy.csproj --configuration Release -p:PublishProfile=src/kissproxy/Properties/PublishProfiles/Linux-arm32.pubxml
-sudo systemctl stop kissproxy
-sudo mv src/publish/* /opt/kissproxy/
-sudo systemctl start kissproxy
-```
-
-#### Multi-port
-
-If you want to run more than one TNC, don't specify any command line parameters. Instead, place `/etc/kissproxy.conf` like this:
-
-```
-[
-  {
-      "id": "2m",
-      "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0",
-      "tcpPort": 8910,
-      "mqttServer": "mqtt"
-  }, {
-      "id": "70cm",
-      "comPort": "/dev/serial/by-path/platform-3f980000.usb-usb-0:1.3:1.0",
-      "tcpPort": 8911,
-      "mqttServer": "mqtt"
-  }
-]
-```
-
 ## kissproxylib
 
-A .NET library version of the above, which can be used to integrate a KISS proxy with optional MQTT support into some other application.
+A .NET library for integrating KISS proxy functionality into other applications.
 
-```
+```bash
 dotnet add package m0lte.kissproxylib
 ```
 
-then simply:
+Basic usage:
 
-```
-var proxy = new KissProxy(new ConsoleLogger());
-await proxy.Run("/dev/tnc-port");
+```csharp
+var proxy = new KissProxy("mytnc", logger);
+await proxy.Run(modemConfig, globalConfig, modemState, cancellationToken);
 ```
 
-That will spin up a KISS proxy for the modem at `/dev/tnc-port`, on TCP port 8910, with the default serial baud rate of 57600, and no MQTT output.
+## Web UI Features
 
-Optional parameters are available:
-
-```
-await proxy.Run("/dev/tnc-port", 
-    modemBaud: 57600, 
-    listenForNodeOnTcpPort: 8910, 
-    allowTcpConnectFromOtherHosts: false, 
-    mqttServer = "server", 
-    mqttUser = "user", 
-    mqttPassword = "password", 
-    emitFramesToMqttAsBase64String: false);
-```
+The web interface provides:
+- Connection status indicators (node connected, serial open)
+- Live frame counters and byte statistics
+- Last frame activity with direction, command type, and payload details
+- NinoTNC status panel (when TX Test frames are received)
+- Full configuration editing for all parameters
+- Serial port dropdown with auto-detected ports
+- Add/remove modems dynamically
+- Save configuration with one click
 
 ## Licence
 

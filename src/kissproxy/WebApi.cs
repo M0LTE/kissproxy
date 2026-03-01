@@ -76,18 +76,71 @@ public static class WebApi
             }, JsonOptions);
         });
 
-        // Modems - get stats only (lightweight polling endpoint)
-        // Returns empty state for new modems that don't have a proxy instance yet
-        api.MapGet("/modems/{id}/stats", (string id) =>
+        // Modems - stream all modem state updates via Server-Sent Events (SSE)
+        // Note: Auth is checked by the endpoint filter, but for SSE we also support query param
+        app.MapGet("/api/modems/stream", async (HttpContext ctx, string? token, CancellationToken cancellationToken) =>
         {
-            // Verify the modem exists in config
-            var config = configManager.GetModem(id);
-            if (config == null)
-                return Results.NotFound();
+            // Check authentication via query param (since EventSource doesn't support custom headers)
+            if (!string.IsNullOrEmpty(token))
+            {
+                if (!configManager.ValidatePassword(token))
+                {
+                    ctx.Response.StatusCode = 401;
+                    return;
+                }
+            }
+            else if (!IsAuthenticated(ctx, configManager))
+            {
+                ctx.Response.StatusCode = 401;
+                return;
+            }
 
-            // Return state if available, otherwise return empty state
-            var state = stateManager.GetSnapshot(id);
-            return Results.Json(state ?? new ModemState { Id = id }, JsonOptions);
+            ctx.Response.Headers.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            ctx.Response.Headers.Connection = "keep-alive";
+
+            // Send initial state for all modems
+            foreach (var modem in configManager.Config.Modems)
+            {
+                var state = stateManager.GetSnapshot(modem.Id);
+                if (state != null)
+                {
+                    await SendSseEvent(ctx, modem.Id, state, cancellationToken);
+                }
+            }
+
+            // Subscribe to state changes
+            void OnStateChanged(string id, ModemState state)
+            {
+                // Send update via SSE (fire and forget)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await SendSseEvent(ctx, id, state, cancellationToken);
+                    }
+                    catch
+                    {
+                        // Client disconnected or shutdown, ignore
+                    }
+                }, cancellationToken);
+            }
+
+            stateManager.StateChanged += OnStateChanged;
+
+            try
+            {
+                // Keep connection alive until cancelled (client disconnect or app shutdown)
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown, don't log
+            }
+            finally
+            {
+                stateManager.StateChanged -= OnStateChanged;
+            }
         });
 
         // Modems - update
@@ -272,6 +325,20 @@ public static class WebApi
 
         var password = authHeader.Substring("Bearer ".Length);
         return configManager.ValidatePassword(password);
+    }
+
+    private static async Task SendSseEvent(HttpContext ctx, string modemId, ModemState state, CancellationToken cancellationToken)
+    {
+        // Use compact JSON for SSE (no indentation) to avoid multi-line issues
+        var sseJsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false // Must be false for SSE single-line format
+        };
+        var json = JsonSerializer.Serialize(new { id = modemId, state }, sseJsonOptions);
+        await ctx.Response.WriteAsync($"data: {json}\n\n", cancellationToken);
+        await ctx.Response.Body.FlushAsync(cancellationToken);
     }
 
     private record GlobalConfigUpdate(

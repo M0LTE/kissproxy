@@ -301,6 +301,11 @@ public class ModemState
     private readonly object lockObj = new();
 
     /// <summary>
+    /// Event raised when this modem's state changes.
+    /// </summary>
+    internal Action? OnStateChanged;
+
+    /// <summary>
     /// Records a frame sent to the modem.
     /// </summary>
     public void RecordFrameToModem(byte[] frame, FrameInfo? info = null)
@@ -325,6 +330,7 @@ public class ModemState
                 UpdateCurrentParameters(info);
             }
         }
+        OnStateChanged?.Invoke();
     }
 
     /// <summary>
@@ -359,6 +365,7 @@ public class ModemState
                 UpdateCurrentParameters(info);
             }
         }
+        OnStateChanged?.Invoke();
     }
 
     /// <summary>
@@ -370,6 +377,22 @@ public class ModemState
         {
             FramesFiltered++;
         }
+        OnStateChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Sets the connection state and notifies listeners.
+    /// </summary>
+    public void SetConnectionState(bool? nodeConnected = null, bool? serialOpen = null)
+    {
+        lock (lockObj)
+        {
+            if (nodeConnected.HasValue)
+                NodeConnected = nodeConnected.Value;
+            if (serialOpen.HasValue)
+                SerialOpen = serialOpen.Value;
+        }
+        OnStateChanged?.Invoke();
     }
 
     /// <summary>
@@ -491,6 +514,11 @@ public class ModemStateManager
     private readonly ConcurrentDictionary<string, ModemState> states = new();
 
     /// <summary>
+    /// Event raised when any modem state changes. Provides the modem ID and snapshot.
+    /// </summary>
+    public event Action<string, ModemState>? StateChanged;
+
+    /// <summary>
     /// Gets all modem states.
     /// </summary>
     public IReadOnlyDictionary<string, ModemState> States => states;
@@ -500,7 +528,20 @@ public class ModemStateManager
     /// </summary>
     public ModemState GetOrCreate(string id)
     {
-        return states.GetOrAdd(id, key => new ModemState { Id = key });
+        return states.GetOrAdd(id, key =>
+        {
+            var state = new ModemState { Id = key };
+            state.OnStateChanged = () => NotifyStateChanged(id, state);
+            return state;
+        });
+    }
+
+    /// <summary>
+    /// Notifies listeners that a modem state has changed.
+    /// </summary>
+    private void NotifyStateChanged(string id, ModemState state)
+    {
+        StateChanged?.Invoke(id, state.Snapshot());
     }
 
     /// <summary>

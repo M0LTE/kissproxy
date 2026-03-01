@@ -513,7 +513,7 @@
         let appliedModes = {};  // Track modes applied via UI (modemId -> modeNum)
         let configWriteable = false;
         let hasUnsavedChanges = false;
-        let pollInterval = null;
+        let eventSource = null;
 
         // API helper
         async function api(method, path, body = null) {
@@ -565,7 +565,10 @@
         function showLogin() {
             document.getElementById('login-screen').style.display = 'flex';
             document.getElementById('app').style.display = 'none';
-            if (pollInterval) clearInterval(pollInterval);
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
         }
 
         async function showApp() {
@@ -579,8 +582,8 @@
             await loadSerialPorts();
             await loadModems();
 
-            // Start polling for stats
-            pollInterval = setInterval(pollStats, 2000);
+            // Connect to real-time stats stream
+            connectStatsStream();
 
             // Update "ago" times every second
             setInterval(updateAgoTimes, 1000);
@@ -663,15 +666,33 @@
             }
         }
 
-        async function pollStats() {
-            for (const modem of modems) {
-                try {
-                    const stats = await api('GET', `/modems/${modem.config.id}/stats`);
-                    updateModemStats(modem.config.id, stats);
-                } catch (e) {
-                    // Ignore polling errors
-                }
+        function connectStatsStream() {
+            // Close existing connection if any
+            if (eventSource) {
+                eventSource.close();
             }
+
+            // Create EventSource with auth token as query parameter (EventSource doesn't support headers)
+            const url = `/api/modems/stream?token=${encodeURIComponent(authToken)}`;
+            eventSource = new EventSource(url);
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateModemStats(data.id, data.state);
+                } catch (e) {
+                    console.error('Failed to parse SSE data:', e);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE connection error:', error);
+                // EventSource will automatically reconnect
+            };
+
+            eventSource.onopen = () => {
+                console.log('SSE connection established');
+            };
         }
 
         function updateModemStats(id, stats) {

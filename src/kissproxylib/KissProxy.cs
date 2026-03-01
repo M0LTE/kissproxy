@@ -235,7 +235,7 @@ public class KissProxy
                     }
 
                     if (modemState != null)
-                        modemState.SerialOpen = true;
+                        modemState.SetConnectionState(serialOpen: true);
 
                     logger.LogInformation("Opened serial port {comPort}", modemComPort);
 
@@ -264,7 +264,7 @@ public class KissProxy
                 {
                     logger.LogError("Could not open {comPort}: {reason}", modemComPort, ex.Message);
                     if (modemState != null)
-                        modemState.SerialOpen = false;
+                        modemState.SetConnectionState(serialOpen: false);
 
                     // Wait before retrying
                     await Task.Delay(5000, cancellationToken);
@@ -290,8 +290,7 @@ public class KissProxy
 
                     if (modemState != null)
                     {
-                        modemState.SerialOpen = false;
-                        modemState.NodeConnected = false;
+                        modemState.SetConnectionState(serialOpen: false, nodeConnected: false);
                     }
                 }
             }
@@ -348,7 +347,7 @@ public class KissProxy
         while (!cancellationToken.IsCancellationRequested)
         {
             if (modemState != null)
-                modemState.NodeConnected = false;
+                modemState.SetConnectionState(nodeConnected: false);
 
             logger.LogInformation("Awaiting node connection on port {port}", tcpPort);
 
@@ -368,7 +367,7 @@ public class KissProxy
             }
 
             if (modemState != null)
-                modemState.NodeConnected = true;
+                modemState.SetConnectionState(nodeConnected: true);
 
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -394,7 +393,7 @@ public class KissProxy
             catch { }
 
             if (modemState != null)
-                modemState.NodeConnected = false;
+                modemState.SetConnectionState(nodeConnected: false);
 
             logger.LogInformation("Node disconnected, serial port remains open");
         }

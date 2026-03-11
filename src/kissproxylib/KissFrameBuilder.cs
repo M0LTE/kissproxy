@@ -281,7 +281,12 @@ public static class KissFrameBuilder
     /// Builds all configured parameter frames based on config settings.
     /// Returns empty array if no parameters are configured.
     /// </summary>
-    public static byte[][] BuildAllParameterFrames(Config config, int port = 0)
+    /// <param name="includeSetHardware">
+    /// When false, the SETHW (NinoTNC mode) frame is omitted.
+    /// Pass false for periodic timer resends when PersistNinoMode is enabled,
+    /// to avoid unnecessary flash write cycles on the TNC.
+    /// </param>
+    public static byte[][] BuildAllParameterFrames(Config config, int port = 0, bool includeSetHardware = true)
     {
         var frames = new List<byte[]>();
 
@@ -300,7 +305,7 @@ public static class KissFrameBuilder
         if (config.FullDuplexValue.HasValue)
             frames.Add(BuildParameterFrame(CMD_FULLDUPLEX, (byte)(config.FullDuplexValue.Value ? 1 : 0), port));
 
-        if (config.NinoMode.HasValue)
+        if (config.NinoMode.HasValue && includeSetHardware)
             frames.Add(BuildSetHwFrame(config.NinoMode.Value, config.PersistNinoMode, port));
 
         return frames.ToArray();

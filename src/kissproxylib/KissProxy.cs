@@ -715,9 +715,14 @@ public class KissProxy
     }
 
     /// <summary>
-    /// Sends configured parameters to the modem synchronously (for timer callback).
+    /// Sends configured parameters to the modem synchronously.
     /// </summary>
-    public void SendConfiguredParameters()
+    /// <param name="includeSetHardware">
+    /// When false, the SETHW (NinoTNC mode) frame is omitted.
+    /// The timer resend path passes false when PersistNinoMode is enabled so the
+    /// mode is not written to flash on every resend interval.
+    /// </param>
+    public void SendConfiguredParameters(bool includeSetHardware = true)
     {
         ISerialPort? serialPort;
         lock (serialPortLock)
@@ -728,7 +733,7 @@ public class KissProxy
         if (serialPort == null || currentConfig == null)
             return;
 
-        var frames = KissFrameBuilder.BuildAllParameterFrames(currentConfig);
+        var frames = KissFrameBuilder.BuildAllParameterFrames(currentConfig, includeSetHardware: includeSetHardware);
         foreach (var frame in frames)
         {
             try
@@ -751,8 +756,19 @@ public class KissProxy
             return;
 
         var interval = TimeSpan.FromSeconds(currentConfig.ParameterSendInterval);
-        parameterResendTimer = new Timer(_ => SendConfiguredParameters(), null, interval, interval);
-        logger.LogInformation("Started parameter resend timer with {interval}s interval", currentConfig.ParameterSendInterval);
+
+        // When PersistNinoMode is on, omit SETHW from periodic resends to avoid
+        // wearing out the TNC's flash with unnecessary write cycles.
+        // The mode was already sent once at connect time (SendConfiguredParametersAsync)
+        // and will be re-sent whenever the user explicitly applies a config change.
+        parameterResendTimer = new Timer(_ =>
+            SendConfiguredParameters(includeSetHardware: !(currentConfig?.PersistNinoMode ?? false)),
+            null, interval, interval);
+
+        if (currentConfig.PersistNinoMode && currentConfig.NinoMode.HasValue)
+            logger.LogInformation("Started parameter resend timer with {interval}s interval (SETHW excluded — mode is persisted to flash)", currentConfig.ParameterSendInterval);
+        else
+            logger.LogInformation("Started parameter resend timer with {interval}s interval", currentConfig.ParameterSendInterval);
     }
 
     private void StopParameterResendTimer()

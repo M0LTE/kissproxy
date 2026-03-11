@@ -523,6 +523,7 @@
         let ninoModes = [];
         let serialPorts = [];
         let globalConfig = {};
+        let tcpPortHighWaterMark = 8909; // Tracks the highest TCP port ever seen/added this session
         let appliedModes = {};  // Track modes applied via UI (modemId -> modeNum)
         let configWriteable = false;
         let hasUnsavedChanges = false;
@@ -673,6 +674,9 @@
         async function loadModems() {
             try {
                 modems = await api('GET', '/modems');
+                // Keep the high-water mark up to date with whatever is in the config
+                const maxLoaded = modems.reduce((max, m) => Math.max(max, m.config.tcpPort || 0), 0);
+                tcpPortHighWaterMark = Math.max(tcpPortHighWaterMark, maxLoaded);
                 renderModems();
             } catch (e) {
                 console.error('Failed to load modems:', e);
@@ -1234,6 +1238,15 @@
                 select.innerHTML = '<option value="">No ports found</option>';
             }
 
+            // Pre-populate TCP port: one above the highest port ever seen this session.
+            // Using a high-water mark (rather than just the current modems list) ensures that
+            // deleting a modem and re-adding doesn't suggest the just-freed port again.
+            const maxFromCurrent = modems.reduce((max, m) => Math.max(max, m.config.tcpPort || 0), 0);
+            document.getElementById('new-modem-tcpport').value = Math.max(maxFromCurrent, tcpPortHighWaterMark) + 1;
+
+            // Clear stale values from a previous open
+            document.getElementById('new-modem-id').value = '';
+
             document.getElementById('add-modem-modal').classList.add('active');
         }
 
@@ -1271,6 +1284,7 @@
 
             try {
                 await api('POST', '/modems', newConfig);
+                tcpPortHighWaterMark = Math.max(tcpPortHighWaterMark, tcpPort);
                 hideAddModem();
                 await loadModems();
                 hasUnsavedChanges = true;

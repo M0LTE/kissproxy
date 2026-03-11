@@ -29,6 +29,7 @@ public class KissProxy
     private ISerialPort? activeSerialPort;
     private Timer? parameterResendTimer;
     private readonly object serialPortLock = new();
+    private readonly SemaphoreSlim serialWriteLock = new(1, 1);
     private NetworkStream? activeTcpStream;
     private TcpClient? activeTcpClient;
     private readonly object tcpLock = new();
@@ -488,6 +489,39 @@ public class KissProxy
         }
     }
 
+    /// <summary>
+    /// Writes a KISS frame to the serial port with exclusive access, preventing
+    /// interleaved bytes from concurrent writers (node→modem, config apply, timer resend).
+    /// </summary>
+    private void WriteToSerial(ISerialPort serialPort, byte[] frame, int offset, int count)
+    {
+        serialWriteLock.Wait();
+        try
+        {
+            serialPort.Write(frame, offset, count);
+        }
+        finally
+        {
+            serialWriteLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Async version of WriteToSerial for use in async paths.
+    /// </summary>
+    private async Task WriteToSerialAsync(ISerialPort serialPort, byte[] frame, int offset, int count)
+    {
+        await serialWriteLock.WaitAsync();
+        try
+        {
+            serialPort.Write(frame, offset, count);
+        }
+        finally
+        {
+            serialWriteLock.Release();
+        }
+    }
+
     private void RunNodeToModem(NetworkStream tcpStream, ISerialPort serialPort, bool emitAsBase64String, CancellationTokenSource cts)
     {
         List<byte> frameBuffer = [];
@@ -534,10 +568,10 @@ public class KissProxy
                     continue;
                 }
 
-                // Forward the frame to modem
+                // Forward the frame to modem (locked to prevent interleaving with config writes)
                 try
                 {
-                    serialPort.Write(frame, 0, frame.Length);
+                    WriteToSerial(serialPort, frame, 0, frame.Length);
                     ProcessOutboundFrame(frame, emitAsBase64String);
                 }
                 catch (Exception ex)
@@ -662,7 +696,7 @@ public class KissProxy
         {
             try
             {
-                serialPort.Write(frame, 0, frame.Length);
+                await WriteToSerialAsync(serialPort, frame, 0, frame.Length);
                 var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
                 if (cmdByte.HasValue)
                 {
@@ -670,7 +704,7 @@ public class KissProxy
                     logger.LogInformation("Sent {command} to modem", KissFrameBuilder.GetCommandName(cmd));
                 }
 
-                // Small delay between parameter sends
+                // Small delay between parameter sends to let the TNC process each command
                 await Task.Delay(50);
             }
             catch (Exception ex)
@@ -699,7 +733,7 @@ public class KissProxy
         {
             try
             {
-                serialPort.Write(frame, 0, frame.Length);
+                WriteToSerial(serialPort, frame, 0, frame.Length);
             }
             catch (Exception ex)
             {

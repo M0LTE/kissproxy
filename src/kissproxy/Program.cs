@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 
@@ -74,12 +75,6 @@ var proxyInstances = new Dictionary<string, KissProxy>();
 
 // Cancellation token for graceful shutdown
 var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (s, e) =>
-{
-    e.Cancel = true;
-    cts.Cancel();
-    LogInfo("Shutdown requested...");
-};
 
 // Start web server
 var builder = WebApplication.CreateBuilder();
@@ -89,8 +84,20 @@ builder.Services.AddLogging(logging =>
     logging.AddConsole();
     logging.SetMinimumLevel(LogLevel.Information);
 });
+// Reduce shutdown timeout so SSE connections don't block exit for 30 seconds
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(5));
 
 var app = builder.Build();
+
+// Wire ASP.NET Core shutdown lifecycle to our cancellation token (and vice versa).
+// This ensures: Ctrl-C stops proxy tasks, and cts.Cancel() from any source stops the web host.
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+lifetime.ApplicationStopping.Register(() =>
+{
+    cts.Cancel();
+    LogInfo("Shutdown requested...");
+});
+cts.Token.Register(() => lifetime.StopApplication());
 
 // Serve static files from wwwroot
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
@@ -149,19 +156,43 @@ foreach (var modemConfig in config.Modems)
     LogInfo($"Started proxy for modem '{modemConfig.Id}' on port {modemConfig.TcpPort}");
 }
 
-// Subscribe to config changes to start/stop proxies
+// Subscribe to config changes: update existing proxies, or start a new one for newly-added modems
 configManager.ModemConfigChanged += modemId =>
 {
-    LogInfo($"Config changed for modem '{modemId}'");
+    var newConfig = configManager.GetModem(modemId);
+    if (newConfig == null)
+        return; // Modem was deleted — no action needed (existing proxy will keep running until restart)
 
-    // If proxy exists, notify it of config change
     if (proxyInstances.TryGetValue(modemId, out var proxy))
     {
-        var newConfig = configManager.GetModem(modemId);
-        if (newConfig != null)
+        // Existing proxy — notify it of the updated config
+        LogInfo($"Config changed for modem '{modemId}'");
+        proxy.OnConfigChanged(newConfig);
+    }
+    else
+    {
+        // New modem added via web UI — start a proxy task for it
+        var state = stateManager.GetOrCreate(modemId);
+        var newProxyLogger = new ConsoleLogger(modemId);
+        var newProxy = new KissProxy(modemId, newProxyLogger);
+        proxyInstances[modemId] = newProxy;
+
+        // Capture current global config (MQTT settings etc.) at the moment the proxy starts
+        var globalConfig = configManager.Config;
+        var task = Task.Run(async () =>
         {
-            proxy.OnConfigChanged(newConfig);
-        }
+            try
+            {
+                await newProxy.Run(newConfig, globalConfig, state, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                LogError($"Modem {modemId} proxy error: {ex.Message}");
+            }
+        });
+        proxyTasks.Add(task);
+
+        LogInfo($"Started proxy for new modem '{modemId}' on port {newConfig.TcpPort}");
     }
 };
 

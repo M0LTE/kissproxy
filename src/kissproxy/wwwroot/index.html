@@ -417,6 +417,19 @@
         .ninotnc-value.success {
             color: var(--success);
         }
+        .setup-note {
+            background: rgba(255, 152, 0, 0.08);
+            border-left: 3px solid var(--warning);
+            border-radius: 0 4px 4px 0;
+            padding: 10px 14px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+        .setup-note strong { color: var(--warning); }
+        .setup-note ul { margin: 4px 0 0 16px; }
+        .setup-note li { margin-bottom: 2px; }
     </style>
 </head>
 <body>
@@ -1080,6 +1093,15 @@
 
                     <div class="config-section">
                         <div class="section-title">NinoTNC Mode</div>
+                        <div class="setup-note">
+                            <strong>Hardware setup required before using software mode control:</strong>
+                            <ul>
+                                <li>Set the <strong>Mode DIP switches to 1111</strong> — this hands mode control over to software (KISS SETHW commands).</li>
+                                <li>Set the <strong>TXDELAY potentiometer to zero</strong> — this hands TX delay control over to software.</li>
+                                <li>Set the <strong>Signals DIP switches</strong> and <strong>Deviation (volume) control</strong> appropriately for your radio — these are not software-controlled.</li>
+                                <li>Press the <strong>Test button</strong> on the TNC to send a status frame; the NinoTNC Status panel will update with the currently active mode and other details.</li>
+                            </ul>
+                        </div>
                         <div class="config-grid">
                             <div class="config-field">
                                 <label>Mode</label>

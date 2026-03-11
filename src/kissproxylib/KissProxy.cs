@@ -53,7 +53,7 @@ public class KissProxy
 
     private IDisposable? BeginLoggingScope() =>
         !string.IsNullOrWhiteSpace(instance)
-            ? logger.BeginScope(new Dictionary<string, object>() { { "instance", instance } })
+            ? logger.BeginScope(instance)
             : null;
 
     private Task MqttClient_DisconnectedAsync(MqttClientDisconnectedEventArgs arg)
@@ -219,15 +219,30 @@ public class KissProxy
         try
         {
             // Open serial port immediately at startup
+            int serialRetryCount = 0;
+            string? lastTriedComPort = null;
+
             while (!cancellationToken.IsCancellationRequested)
             {
+                // Read port/baud from currentConfig so web UI changes take effect on next retry
+                var comPortToTry = currentConfig?.ComPort ?? modemComPort;
+                var baudToTry = currentConfig?.Baud ?? modemSerialBaud;
+
+                // Reset backoff counter when the target port changes (e.g. user corrected it in web UI)
+                if (comPortToTry != lastTriedComPort)
+                {
+                    serialRetryCount = 0;
+                    lastTriedComPort = comPortToTry;
+                }
+
                 ISerialPort? serialPort = null;
                 try
                 {
-                    serialPort = serialPortFactory.Create(modemComPort, modemSerialBaud);
+                    serialPort = serialPortFactory.Create(comPortToTry, baudToTry);
                     serialPort.Open();
                     serialPort.ReadTimeout = 1000; // 1 second timeout for graceful shutdown
                     serialPort.DiscardInBuffer();
+                    serialRetryCount = 0; // Reset backoff on successful open
 
                     lock (serialPortLock)
                     {
@@ -237,7 +252,7 @@ public class KissProxy
                     if (modemState != null)
                         modemState.SetConnectionState(serialOpen: true);
 
-                    logger.LogInformation("Opened serial port {comPort}", modemComPort);
+                    logger.LogInformation("Opened serial port {comPort}", comPortToTry);
 
                     // Send configured parameters to modem on connect
                     await SendConfiguredParametersAsync(serialPort);
@@ -262,12 +277,18 @@ public class KissProxy
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError("Could not open {comPort}: {reason}", modemComPort, ex.Message);
+                    if (serialRetryCount == 0)
+                        logger.LogError("Could not open {comPort}: {reason}", comPortToTry, ex.Message);
+                    else
+                        logger.LogWarning("Still unable to open {comPort}: {reason}", comPortToTry, ex.Message);
+
                     if (modemState != null)
                         modemState.SetConnectionState(serialOpen: false);
 
-                    // Wait before retrying
-                    await Task.Delay(5000, cancellationToken);
+                    // Exponential backoff: 5s, 10s, 20s, 40s, then 60s cap
+                    var delaySeconds = Math.Min(5 * (1 << Math.Min(serialRetryCount, 4)), 60);
+                    serialRetryCount++;
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
                     continue;
                 }
                 finally

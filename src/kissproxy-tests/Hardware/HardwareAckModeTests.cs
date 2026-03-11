@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using FluentAssertions;
+using AwesomeAssertions;
 using kissproxylib;
 using Xunit.Abstractions;
 
@@ -103,7 +103,7 @@ public class HardwareAckModeTests : HardwareTestBase
         // Note: ACK timing varies based on TNC implementation
         // Some TNCs ACK when queued, others when transmitted
         // Just verify ACK is received with correct sequence bytes
-        ack!.Length.Should().BeGreaterOrEqualTo(4, "ACK should have at least 4 bytes");
+        ack!.Length.Should().BeGreaterThanOrEqualTo(4, "ACK should have at least 4 bytes");
         ack[3].Should().Be(0x01, "seq_lo should be preserved");
 
         Output.WriteLine("ACKMODE timing test completed");

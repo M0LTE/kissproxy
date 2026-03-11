@@ -39,7 +39,7 @@ kissproxylib is a .NET library version which can be used to integrate a KISS pro
 ## Quick Start
 
 ### Prerequisites
-- .NET 8 SDK or later
+- .NET 10 SDK or later
 
 ### Build and Run
 

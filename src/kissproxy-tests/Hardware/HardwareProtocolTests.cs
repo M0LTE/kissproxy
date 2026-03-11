@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using kissproxylib;
 using Xunit.Abstractions;
 

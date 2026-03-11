@@ -1,4 +1,4 @@
-﻿using kissproxylib;
+using kissproxylib;
 using Microsoft.Extensions.Logging;
 using System.Collections.ObjectModel;
 using System.CommandLine;
@@ -11,50 +11,74 @@ internal class Program
 {
     private static readonly JsonSerializerOptions options = new() { PropertyNameCaseInsensitive = true };
 
-    private static int Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
-        var comPortOption = new Option<string?>("--comport", "The COM port the modem is connected to, e.g. /dev/ttyACM0");
-        comPortOption.AddAlias("-c");
+        var comPortOption = new Option<string?>("--comport")
+        {
+            Description = "The COM port the modem is connected to, e.g. /dev/ttyACM0"
+        };
+        comPortOption.Aliases.Add("-c");
 
-        var baudOption = new Option<int>("--baud", "The baud rate of the modem");
-        baudOption.AddAlias("-b");
-        baudOption.SetDefaultValue(57600);
+        var baudOption = new Option<int>("--baud")
+        {
+            Description = "The baud rate of the modem",
+            DefaultValueFactory = _ => 57600
+        };
+        baudOption.Aliases.Add("-b");
 
-        var tcpPortOption = new Option<int>("--tcpport", "The TCP port to listen on");
-        tcpPortOption.AddAlias("-p");
-        tcpPortOption.SetDefaultValue(8910);
+        var tcpPortOption = new Option<int>("--tcpport")
+        {
+            Description = "The TCP port to listen on",
+            DefaultValueFactory = _ => 8910
+        };
+        tcpPortOption.Aliases.Add("-p");
 
-        var anyHostOption = new Option<bool>(
-            name: "--anyhost",
-            description: "Whether to accept connections from any host, instead of just localhost",
-            getDefaultValue: () => false);
-        anyHostOption.AddAlias("-a");
+        var anyHostOption = new Option<bool>("--anyhost")
+        {
+            Description = "Whether to accept connections from any host, instead of just localhost"
+        };
+        anyHostOption.Aliases.Add("-a");
 
-        var brokerOption = new Option<string?>("--mqtt-server", "MQTT server to forward KISS frames to");
-        brokerOption.AddAlias("-m");
+        var brokerOption = new Option<string?>("--mqtt-server")
+        {
+            Description = "MQTT server to forward KISS frames to"
+        };
+        brokerOption.Aliases.Add("-m");
 
-        var brokerUserOption = new Option<string?>("--mqtt-user", "MQTT username");
-        brokerUserOption.AddAlias("-mu");
+        var brokerUserOption = new Option<string?>("--mqtt-user")
+        {
+            Description = "MQTT username"
+        };
+        brokerUserOption.Aliases.Add("-mu");
 
-        var brokerPasswordOption = new Option<string?>("--mqtt-pass", "MQTT password");
-        brokerPasswordOption.AddAlias("-mp");
+        var brokerPasswordOption = new Option<string?>("--mqtt-pass")
+        {
+            Description = "MQTT password"
+        };
+        brokerPasswordOption.Aliases.Add("-mp");
 
-        var topicOption = new Option<string?>("--mqtt-topic-prefix", "MQTT topic prefix");
-        topicOption.AddAlias("-mt");
+        var topicOption = new Option<string?>("--mqtt-topic-prefix")
+        {
+            Description = "MQTT topic prefix"
+        };
+        topicOption.Aliases.Add("-mt");
 
-        var publishBase64Option = new Option<bool>("--base64", "Publish base64 strings rather than raw bytes");
+        var publishBase64Option = new Option<bool>("--base64")
+        {
+            Description = "Publish base64 strings rather than raw bytes"
+        };
 
         var rootCommand = new RootCommand("Serial-to-TCP proxy for serial KISS modems, including MQTT tracing support.");
-        rootCommand.AddOption(comPortOption);
-        rootCommand.AddOption(baudOption);
-        rootCommand.AddOption(tcpPortOption);
-        rootCommand.AddOption(anyHostOption);
-        rootCommand.AddOption(brokerOption);
-        rootCommand.AddOption(brokerUserOption);
-        rootCommand.AddOption(brokerPasswordOption);
-        rootCommand.AddOption(topicOption);
-        rootCommand.AddOption(publishBase64Option);
-        rootCommand.SetHandler(async context =>
+        rootCommand.Options.Add(comPortOption);
+        rootCommand.Options.Add(baudOption);
+        rootCommand.Options.Add(tcpPortOption);
+        rootCommand.Options.Add(anyHostOption);
+        rootCommand.Options.Add(brokerOption);
+        rootCommand.Options.Add(brokerUserOption);
+        rootCommand.Options.Add(brokerPasswordOption);
+        rootCommand.Options.Add(topicOption);
+        rootCommand.Options.Add(publishBase64Option);
+        rootCommand.SetAction(async (ParseResult parseResult, CancellationToken token) =>
         {
             string configFile = "/etc/kissproxy.conf";
 
@@ -90,22 +114,22 @@ internal class Program
             }
             else
             {
-                var modemComPort = context.ParseResult.GetValueForOption(comPortOption);
-                var modemSerialBaud = context.ParseResult.GetValueForOption(baudOption);
-                var listenForNodeOnTcpPort = context.ParseResult.GetValueForOption(tcpPortOption);
-                var allowTcpConnectFromOtherHosts = context.ParseResult.GetValueForOption(anyHostOption);
-                var mqttServer = context.ParseResult.GetValueForOption(brokerOption);
-                var mqttUser = context.ParseResult.GetValueForOption(brokerUserOption);
-                var mqttPassword = context.ParseResult.GetValueForOption(brokerPasswordOption);
-                var mqttTopicPrefix = context.ParseResult.GetValueForOption(topicOption);
-                var emitFramesToMqttAsBase64String = context.ParseResult.GetValueForOption(publishBase64Option);
+                var modemComPort = parseResult.GetValue(comPortOption);
+                var modemSerialBaud = parseResult.GetValue(baudOption);
+                var listenForNodeOnTcpPort = parseResult.GetValue(tcpPortOption);
+                var allowTcpConnectFromOtherHosts = parseResult.GetValue(anyHostOption);
+                var mqttServer = parseResult.GetValue(brokerOption);
+                var mqttUser = parseResult.GetValue(brokerUserOption);
+                var mqttPassword = parseResult.GetValue(brokerPasswordOption);
+                var mqttTopicPrefix = parseResult.GetValue(topicOption);
+                var emitFramesToMqttAsBase64String = parseResult.GetValue(publishBase64Option);
 
                 await new KissProxy(new ConsoleLogger())
                     .Run(modemComPort!, modemSerialBaud, listenForNodeOnTcpPort, allowTcpConnectFromOtherHosts, mqttServer, mqttUser, mqttPassword, mqttTopicPrefix, emitFramesToMqttAsBase64String);
             }
         });
 
-        return rootCommand.Invoke(args);
+        return await rootCommand.Parse(args).InvokeAsync();
     }
 
     private class ConsoleLogger : ILogger

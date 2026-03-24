@@ -464,6 +464,10 @@
                     <input type="password" id="global-password" placeholder="Enter new password" onchange="updateGlobalConfig('password', this.value)">
                 </div>
                 <div class="config-field">
+                    <label>My Callsign</label>
+                    <input type="text" id="global-mycallsign" placeholder="e.g. VK2ABC" style="text-transform: uppercase" onchange="updateGlobalConfig('myCallsign', this.value.toUpperCase().trim())">
+                </div>
+                <div class="config-field">
                     <label>MQTT Server</label>
                     <input type="text" id="global-mqtt-server" placeholder="host:port" onchange="updateGlobalConfig('mqttServer', this.value)">
                 </div>
@@ -474,6 +478,32 @@
                 <div class="config-field">
                     <label>MQTT Password</label>
                     <input type="password" id="global-mqtt-password" placeholder="Enter new password" onchange="updateGlobalConfig('mqttPassword', this.value)">
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Transmission (shown only when My Callsign is set and modems exist) -->
+        <div class="modem-card" id="test-transmission" style="margin-bottom: 20px; display: none;">
+            <div class="modem-header">
+                <span class="modem-title">Test Transmission</span>
+            </div>
+            <div class="config-grid">
+                <div class="config-field">
+                    <label>To Callsign</label>
+                    <input type="text" id="tx-to-callsign" value="CQ" style="text-transform: uppercase">
+                </div>
+                <div class="config-field">
+                    <label>Modem</label>
+                    <select id="tx-modem-select">
+                        <option value="">Select modem...</option>
+                    </select>
+                </div>
+                <div class="config-field" style="grid-column: 1 / -1;">
+                    <label>Message</label>
+                    <textarea id="tx-message" rows="3" placeholder="Enter test message" style="width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 6px; padding: 8px; font-family: inherit; resize: vertical;"></textarea>
+                </div>
+                <div class="config-field">
+                    <button class="btn-primary" onclick="sendTestTransmission()">Send</button>
                 </div>
             </div>
         </div>
@@ -620,11 +650,13 @@
             try {
                 globalConfig = await api('GET', '/global');
                 // Populate global settings fields
+                document.getElementById('global-mycallsign').value = globalConfig.myCallsign || '';
                 document.getElementById('global-mqtt-server').value = globalConfig.mqttServer || '';
                 document.getElementById('global-mqtt-username').value = globalConfig.mqttUsername || '';
                 // Password fields are not populated (security)
                 document.getElementById('global-password').placeholder = globalConfig.hasPassword ? 'Password set (enter to change)' : 'Enter password';
                 document.getElementById('global-mqtt-password').placeholder = globalConfig.hasMqttPassword ? 'Password set (enter to change)' : 'Enter password';
+                updateTestTransmissionVisibility();
             } catch (e) {
                 console.error('Failed to load global config:', e);
             }
@@ -650,8 +682,66 @@
                     localStorage.setItem('kissproxy-token', value);
                     showToast('Password updated. Using new password for this session.', 'success');
                 }
+
+                // Keep local globalConfig in sync for visibility checks
+                if (key === 'myCallsign') {
+                    globalConfig.myCallsign = value || null;
+                    updateTestTransmissionVisibility();
+                }
             } catch (e) {
                 showToast('Failed to update global config: ' + e.message, 'error');
+            }
+        }
+
+        // --- Test Transmission ---
+
+        function updateTestTransmissionVisibility() {
+            const card = document.getElementById('test-transmission');
+            if (globalConfig.myCallsign && modems.length > 0) {
+                card.style.display = '';
+            } else {
+                card.style.display = 'none';
+            }
+        }
+
+        function populateModemDropdown() {
+            const select = document.getElementById('tx-modem-select');
+            const currentValue = select.value;
+            select.innerHTML = '<option value="">Select modem...</option>';
+            modems.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.config.id;
+                opt.textContent = m.config.id;
+                select.appendChild(opt);
+            });
+            // Restore previous selection if still valid
+            if (currentValue && modems.some(m => m.config.id === currentValue)) {
+                select.value = currentValue;
+            }
+        }
+
+        async function sendTestTransmission() {
+            const toCallsign = document.getElementById('tx-to-callsign').value.trim().toUpperCase() || 'CQ';
+            const message = document.getElementById('tx-message').value;
+            const modemId = document.getElementById('tx-modem-select').value;
+
+            if (!modemId) {
+                showToast('Please select a modem', 'error');
+                return;
+            }
+            if (!message) {
+                showToast('Please enter a message', 'error');
+                return;
+            }
+
+            try {
+                const result = await api('POST', `/modems/${modemId}/transmit`, {
+                    toCallsign: toCallsign,
+                    message: message
+                });
+                showToast('Transmission sent', 'success');
+            } catch (e) {
+                showToast('Transmit failed: ' + e.message, 'error');
             }
         }
 
@@ -678,6 +768,8 @@
                 const maxLoaded = modems.reduce((max, m) => Math.max(max, m.config.tcpPort || 0), 0);
                 tcpPortHighWaterMark = Math.max(tcpPortHighWaterMark, maxLoaded);
                 renderModems();
+                populateModemDropdown();
+                updateTestTransmissionVisibility();
             } catch (e) {
                 console.error('Failed to load modems:', e);
             }
@@ -1222,6 +1314,8 @@
                 await api('DELETE', `/modems/${id}`);
                 modems = modems.filter(m => m.config.id !== id);
                 renderModems();
+                populateModemDropdown();
+                updateTestTransmissionVisibility();
                 hasUnsavedChanges = true;
                 document.getElementById('unsaved-indicator').classList.add('show');
                 showToast('Modem removed', 'success');

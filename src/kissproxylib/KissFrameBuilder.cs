@@ -310,4 +310,118 @@ public static class KissFrameBuilder
 
         return frames.ToArray();
     }
+
+    // --- AX.25 UI frame construction ---
+
+    /// <summary>
+    /// AX.25 control field for Unnumbered Information (UI) frames.
+    /// </summary>
+    public const byte AX25_CONTROL_UI = 0x03;
+
+    /// <summary>
+    /// AX.25 Protocol ID for "No layer 3 protocol".
+    /// </summary>
+    public const byte AX25_PID_NO_LAYER3 = 0xF0;
+
+    /// <summary>
+    /// Encodes a callsign (with optional SSID, e.g. "VK2ABC-5") into a 7-byte AX.25 address field.
+    /// Characters are shifted left by 1 bit per the AX.25 specification.
+    /// </summary>
+    /// <param name="callsign">Callsign with optional SSID (e.g. "CQ", "VK2ABC", "VK2ABC-5")</param>
+    /// <param name="lastAddress">True if this is the last address in the address field (sets the end-of-address bit)</param>
+    /// <returns>7-byte encoded address field</returns>
+    public static byte[] EncodeCallsign(string callsign, bool lastAddress)
+    {
+        if (string.IsNullOrWhiteSpace(callsign))
+            throw new ArgumentException("Callsign cannot be empty", nameof(callsign));
+
+        var parts = callsign.Split('-');
+        var call = parts[0].ToUpper().Trim();
+
+        if (call.Length == 0 || call.Length > 6)
+            throw new ArgumentException($"Callsign base must be 1-6 characters, got '{call}'", nameof(callsign));
+
+        int ssid = 0;
+        if (parts.Length > 1)
+        {
+            if (!int.TryParse(parts[1], out ssid) || ssid < 0 || ssid > 15)
+                throw new ArgumentException($"SSID must be 0-15, got '{parts[1]}'", nameof(callsign));
+        }
+
+        call = call.PadRight(6);
+
+        var encoded = new byte[7];
+        for (int i = 0; i < 6; i++)
+        {
+            encoded[i] = (byte)(call[i] << 1);
+        }
+        // SSID byte: 011SSSS0 (or 011SSSS1 for last address)
+        encoded[6] = (byte)(0x60 | ((ssid & 0x0F) << 1) | (lastAddress ? 1 : 0));
+
+        return encoded;
+    }
+
+    /// <summary>
+    /// Builds an AX.25 UI (Unnumbered Information) frame with no layer 3 protocol.
+    /// </summary>
+    /// <param name="source">Source callsign (e.g. "VK2ABC" or "VK2ABC-5")</param>
+    /// <param name="dest">Destination callsign (e.g. "CQ" or "VK2XYZ-1")</param>
+    /// <param name="info">Information field payload</param>
+    /// <returns>Complete AX.25 UI frame bytes (without KISS framing)</returns>
+    public static byte[] BuildAx25UiFrame(string source, string dest, byte[] info)
+    {
+        var frame = new List<byte>();
+
+        // Destination address (7 bytes)
+        frame.AddRange(EncodeCallsign(dest, false));
+
+        // Source address (7 bytes, with end-of-address bit)
+        frame.AddRange(EncodeCallsign(source, true));
+
+        // Control field: UI frame
+        frame.Add(AX25_CONTROL_UI);
+
+        // PID: No layer 3
+        frame.Add(AX25_PID_NO_LAYER3);
+
+        // Info field
+        frame.AddRange(info);
+
+        return frame.ToArray();
+    }
+
+    /// <summary>
+    /// Wraps an AX.25 frame in KISS data frame framing, with proper byte stuffing.
+    /// FEND (0xC0) in payload is escaped to FESC TFEND (0xDB 0xDC).
+    /// FESC (0xDB) in payload is escaped to FESC TFESC (0xDB 0xDD).
+    /// </summary>
+    /// <param name="ax25Data">The AX.25 frame data to wrap</param>
+    /// <param name="port">KISS port number (0-15)</param>
+    /// <returns>Complete KISS frame with delimiters and escaping</returns>
+    public static byte[] BuildKissDataFrame(byte[] ax25Data, int port = 0)
+    {
+        var frame = new List<byte> { FEND, BuildCommandByte(CMD_DATAFRAME, port) };
+
+        // Apply KISS byte stuffing to the payload
+        foreach (var b in ax25Data)
+        {
+            if (b == FEND)
+            {
+                frame.Add(FESC);
+                frame.Add(TFEND);
+            }
+            else if (b == FESC)
+            {
+                frame.Add(FESC);
+                frame.Add(TFESC);
+            }
+            else
+            {
+                frame.Add(b);
+            }
+        }
+
+        frame.Add(FEND);
+        return frame.ToArray();
+    }
 }

@@ -168,4 +168,149 @@ public class KissFrameBuilderTests
         KissFrameBuilder.NinoModes[0].Should().Contain("9600");
         KissFrameBuilder.NinoModes[10].Should().Contain("1200");
     }
+
+    // --- AX.25 UI frame and KISS data frame tests ---
+
+    [Fact]
+    public void EncodeCallsign_SimpleCall_ReturnsCorrectBytes()
+    {
+        var result = KissFrameBuilder.EncodeCallsign("CQ", false);
+        result.Should().HaveCount(7);
+        // 'C' = 0x43, shifted left = 0x86
+        result[0].Should().Be(0x86);
+        // 'Q' = 0x51, shifted left = 0xA2
+        result[1].Should().Be(0xA2);
+        // Remaining positions are space (0x20), shifted left = 0x40
+        result[2].Should().Be(0x40);
+        result[3].Should().Be(0x40);
+        result[4].Should().Be(0x40);
+        result[5].Should().Be(0x40);
+        // SSID byte: 0x60 | (0 << 1) | 0 = 0x60
+        result[6].Should().Be(0x60);
+    }
+
+    [Fact]
+    public void EncodeCallsign_WithSsid_ReturnsCorrectSsidByte()
+    {
+        var result = KissFrameBuilder.EncodeCallsign("VK2ABC-5", false);
+        result.Should().HaveCount(7);
+        // SSID byte: 0x60 | (5 << 1) | 0 = 0x60 | 0x0A = 0x6A
+        result[6].Should().Be(0x6A);
+    }
+
+    [Fact]
+    public void EncodeCallsign_LastAddress_SetsEndBit()
+    {
+        var result = KissFrameBuilder.EncodeCallsign("CQ", true);
+        // SSID byte with end bit: 0x60 | (0 << 1) | 1 = 0x61
+        result[6].Should().Be(0x61);
+    }
+
+    [Fact]
+    public void EncodeCallsign_LastAddressWithSsid_SetsEndBit()
+    {
+        var result = KissFrameBuilder.EncodeCallsign("TEST-15", true);
+        // SSID byte: 0x60 | (15 << 1) | 1 = 0x60 | 0x1E | 0x01 = 0x7F
+        result[6].Should().Be(0x7F);
+    }
+
+    [Fact]
+    public void EncodeCallsign_EmptyCallsign_Throws()
+    {
+        var action = () => KissFrameBuilder.EncodeCallsign("", false);
+        action.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void EncodeCallsign_TooLongCallsign_Throws()
+    {
+        var action = () => KissFrameBuilder.EncodeCallsign("TOOLONG1", false);
+        action.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void EncodeCallsign_InvalidSsid_Throws()
+    {
+        var action = () => KissFrameBuilder.EncodeCallsign("TEST-16", false);
+        action.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void BuildAx25UiFrame_ProducesCorrectFrame()
+    {
+        var info = new byte[] { 0x48, 0x65, 0x6C, 0x6C, 0x6F }; // "Hello"
+        var frame = KissFrameBuilder.BuildAx25UiFrame("SRC", "DST", info);
+
+        // Dest (7) + Src (7) + Control (1) + PID (1) + Info (5) = 21 bytes
+        frame.Should().HaveCount(21);
+
+        // Control field at offset 14 should be 0x03 (UI)
+        frame[14].Should().Be(0x03);
+
+        // PID at offset 15 should be 0xF0 (No layer 3)
+        frame[15].Should().Be(0xF0);
+
+        // Info field
+        frame[16].Should().Be(0x48); // 'H'
+        frame[17].Should().Be(0x65); // 'e'
+
+        // Source address (last) should have end-of-address bit set
+        (frame[13] & 0x01).Should().Be(1);
+        // Dest address (not last) should not have end-of-address bit
+        (frame[6] & 0x01).Should().Be(0);
+    }
+
+    [Fact]
+    public void BuildKissDataFrame_WrapsCorrectly()
+    {
+        var ax25Data = new byte[] { 0x01, 0x02, 0x03 };
+        var frame = KissFrameBuilder.BuildKissDataFrame(ax25Data);
+
+        // FEND + cmd + data + FEND = 6 bytes
+        frame.Should().HaveCount(6);
+        frame[0].Should().Be(FEND);
+        frame[1].Should().Be(0x00); // CMD_DATAFRAME on port 0
+        frame[2].Should().Be(0x01);
+        frame[3].Should().Be(0x02);
+        frame[4].Should().Be(0x03);
+        frame[5].Should().Be(FEND);
+    }
+
+    [Fact]
+    public void BuildKissDataFrame_WithPort_SetsCorrectCommandByte()
+    {
+        var ax25Data = new byte[] { 0x01 };
+        var frame = KissFrameBuilder.BuildKissDataFrame(ax25Data, port: 3);
+
+        frame[1].Should().Be(0x30); // (3 << 4) | 0x00
+    }
+
+    [Fact]
+    public void BuildKissDataFrame_EscapesFendInPayload()
+    {
+        var ax25Data = new byte[] { 0x01, FEND, 0x03 };
+        var frame = KissFrameBuilder.BuildKissDataFrame(ax25Data);
+
+        // FEND + cmd + 0x01 + FESC + TFEND + 0x03 + FEND = 7 bytes
+        frame.Should().HaveCount(7);
+        frame[0].Should().Be(FEND);
+        frame[1].Should().Be(0x00);
+        frame[2].Should().Be(0x01);
+        frame[3].Should().Be(KissFrameBuilder.FESC);
+        frame[4].Should().Be(KissFrameBuilder.TFEND);
+        frame[5].Should().Be(0x03);
+        frame[6].Should().Be(FEND);
+    }
+
+    [Fact]
+    public void BuildKissDataFrame_EscapesFescInPayload()
+    {
+        var ax25Data = new byte[] { KissFrameBuilder.FESC };
+        var frame = KissFrameBuilder.BuildKissDataFrame(ax25Data);
+
+        // FEND + cmd + FESC + TFESC + FEND = 5 bytes
+        frame.Should().HaveCount(5);
+        frame[2].Should().Be(KissFrameBuilder.FESC);
+        frame[3].Should().Be(KissFrameBuilder.TFESC);
+    }
 }

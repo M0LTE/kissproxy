@@ -47,6 +47,9 @@ public record GlobalConfig
     public int WebPort { get; set; } = 8080;
     public string Password { get; set; } = "";  // Web UI password (empty = allow any)
 
+    // Station identity (used as source callsign for test transmissions)
+    public string? MyCallsign { get; set; }
+
     // Global MQTT settings (shared by all modems)
     public string? MqttServer { get; set; }
     public string? MqttUsername { get; set; }

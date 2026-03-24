@@ -490,6 +490,35 @@ public class KissProxy
     }
 
     /// <summary>
+    /// Sends a raw KISS frame to the modem's serial port.
+    /// Thread-safe: uses the same serialWriteLock as all other serial writers.
+    /// </summary>
+    /// <param name="kissFrame">Complete KISS frame including FEND delimiters</param>
+    /// <returns>True if the frame was sent, false if serial port is not open</returns>
+    public bool SendRawFrame(byte[] kissFrame)
+    {
+        ISerialPort? serialPort;
+        lock (serialPortLock)
+        {
+            serialPort = activeSerialPort;
+        }
+
+        if (serialPort == null)
+            return false;
+
+        try
+        {
+            WriteToSerial(serialPort, kissFrame, 0, kissFrame.Length);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("SendRawFrame failed: {error}", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Writes a KISS frame to the serial port with exclusive access, preventing
     /// interleaved bytes from concurrent writers (node→modem, config apply, timer resend).
     /// </summary>

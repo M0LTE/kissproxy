@@ -3,6 +3,7 @@ using kissproxylib;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -230,6 +231,55 @@ public static class WebApi
             return Results.Ok(new { message = "Settings applied to modem." });
         });
 
+        // Modems - send test transmission (AX.25 UI frame)
+        api.MapPost("/modems/{id}/transmit", async (string id, HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<TransmitRequest>(JsonOptions);
+                if (request == null)
+                    return Results.BadRequest(new { message = "Invalid request" });
+
+                // Validate MyCallsign is configured
+                var myCallsign = configManager.Config.MyCallsign;
+                if (string.IsNullOrWhiteSpace(myCallsign))
+                    return Results.BadRequest(new { message = "My Callsign is not configured in Global Settings" });
+
+                // Validate destination callsign
+                var toCallsign = string.IsNullOrWhiteSpace(request.ToCallsign) ? "CQ" : request.ToCallsign.Trim().ToUpper();
+
+                // Validate message
+                if (string.IsNullOrEmpty(request.Message))
+                    return Results.BadRequest(new { message = "Message cannot be empty" });
+
+                var messageBytes = Encoding.ASCII.GetBytes(request.Message);
+                if (messageBytes.Length > 256)
+                    return Results.BadRequest(new { message = "Message too long (max 256 bytes)" });
+
+                // Find proxy
+                if (!proxyInstances.TryGetValue(id, out var proxy))
+                    return Results.NotFound(new { message = $"Modem '{id}' not found or not running" });
+
+                // Build AX.25 UI frame and wrap in KISS
+                var ax25Frame = KissFrameBuilder.BuildAx25UiFrame(myCallsign, toCallsign, messageBytes);
+                var kissFrame = KissFrameBuilder.BuildKissDataFrame(ax25Frame);
+
+                // Send to modem
+                if (!proxy.SendRawFrame(kissFrame))
+                    return Results.Json(new { message = "Modem serial port is not open" }, statusCode: 503);
+
+                return Results.Ok(new { message = "Transmission sent" });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { message = ex.Message });
+            }
+        });
+
         // Save config to file
         api.MapPost("/save", () =>
         {
@@ -262,11 +312,12 @@ public static class WebApi
             return Results.Json(modes, JsonOptions);
         });
 
-        // Global config (web port, password, MQTT settings)
+        // Global config (web port, password, MQTT settings, callsign)
         api.MapGet("/global", () => new
         {
             webPort = configManager.Config.WebPort,
             hasPassword = !string.IsNullOrEmpty(configManager.Config.Password),
+            myCallsign = configManager.Config.MyCallsign,
             mqttServer = configManager.Config.MqttServer,
             mqttUsername = configManager.Config.MqttUsername,
             hasMqttPassword = !string.IsNullOrEmpty(configManager.Config.MqttPassword)
@@ -283,9 +334,11 @@ public static class WebApi
                 configManager.UpdateGlobal(
                     update.WebPort,
                     update.Password,
+                    update.MyCallsign,
                     update.MqttServer,
                     update.MqttUsername,
                     update.MqttPassword,
+                    update.ClearMyCallsign,
                     update.ClearMqttServer,
                     update.ClearMqttUsername,
                     update.ClearMqttPassword);
@@ -344,10 +397,14 @@ public static class WebApi
     private record GlobalConfigUpdate(
         int? WebPort,
         string? Password,
+        string? MyCallsign,
         string? MqttServer,
         string? MqttUsername,
         string? MqttPassword,
+        bool ClearMyCallsign = false,
         bool ClearMqttServer = false,
         bool ClearMqttUsername = false,
         bool ClearMqttPassword = false);
+
+    private record TransmitRequest(string? ToCallsign, string? Message);
 }

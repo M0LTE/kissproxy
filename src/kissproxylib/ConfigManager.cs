@@ -201,9 +201,11 @@ public class ConfigManager
     public void UpdateGlobal(
         int? webPort = null,
         string? password = null,
+        string? myCallsign = null,
         string? mqttServer = null,
         string? mqttUsername = null,
         string? mqttPassword = null,
+        bool clearMyCallsign = false,
         bool clearMqttServer = false,
         bool clearMqttUsername = false,
         bool clearMqttPassword = false)
@@ -213,6 +215,11 @@ public class ConfigManager
 
         if (password != null)
             config = config with { Password = password };
+
+        if (clearMyCallsign)
+            config = config with { MyCallsign = null };
+        else if (myCallsign != null)
+            config = config with { MyCallsign = myCallsign.ToUpper().Trim() };
 
         if (clearMqttServer)
             config = config with { MqttServer = null };

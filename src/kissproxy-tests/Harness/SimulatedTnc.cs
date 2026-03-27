@@ -18,7 +18,6 @@ public class SimulatedTnc : ISerialPort
     private readonly BlockingCollection<byte> _fromTnc = new();
     private readonly CancellationTokenSource _cts = new();
     private Task? _processingTask;
-    private bool _isOpen;
 
     // State tracking
     public int TxDelay { get; private set; }
@@ -42,13 +41,11 @@ public class SimulatedTnc : ISerialPort
 
     public void Open()
     {
-        _isOpen = true;
         _processingTask = Task.Run(ProcessIncomingFrames);
     }
 
     public void Close()
     {
-        _isOpen = false;
         _cts.Cancel();
         _toTnc.CompleteAdding();
     }

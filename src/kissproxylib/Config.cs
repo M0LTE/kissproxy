@@ -25,10 +25,10 @@ public record Config
     public bool FilterSetHardware { get; set; } = false;
 
     // KISS parameter override values (sent to modem instead)
-    public int? TxDelayValue { get; set; }        // 10ms units
+    public int? TxDelayValue { get; set; }        // ms (converted to 10ms units when sent)
     public int? PersistenceValue { get; set; }    // 0-255
-    public int? SlotTimeValue { get; set; }       // 10ms units
-    public int? TxTailValue { get; set; }         // 10ms units
+    public int? SlotTimeValue { get; set; }       // ms (converted to 10ms units when sent)
+    public int? TxTailValue { get; set; }         // ms (converted to 10ms units when sent)
     public bool? FullDuplexValue { get; set; }    // true/false
 
     // Periodic parameter send interval (seconds, 0 = on connect only)

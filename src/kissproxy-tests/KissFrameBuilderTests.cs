@@ -136,9 +136,9 @@ public class KissFrameBuilderTests
         {
             Id = "test",
             ComPort = "/dev/ttyACM0",
-            TxDelayValue = 50,
+            TxDelayValue = 500,
             PersistenceValue = 63,
-            SlotTimeValue = 10,
+            SlotTimeValue = 100,
             TxTailValue = 0,
             FullDuplexValue = false,
             NinoMode = 5,

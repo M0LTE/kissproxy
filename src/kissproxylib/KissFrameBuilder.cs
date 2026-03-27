@@ -291,16 +291,16 @@ public static class KissFrameBuilder
         var frames = new List<byte[]>();
 
         if (config.TxDelayValue.HasValue)
-            frames.Add(BuildParameterFrame(CMD_TXDELAY, (byte)config.TxDelayValue.Value, port));
+            frames.Add(BuildParameterFrame(CMD_TXDELAY, (byte)Math.Clamp(config.TxDelayValue.Value / 10, 0, 255), port));
 
         if (config.PersistenceValue.HasValue)
             frames.Add(BuildParameterFrame(CMD_PERSISTENCE, (byte)config.PersistenceValue.Value, port));
 
         if (config.SlotTimeValue.HasValue)
-            frames.Add(BuildParameterFrame(CMD_SLOTTIME, (byte)config.SlotTimeValue.Value, port));
+            frames.Add(BuildParameterFrame(CMD_SLOTTIME, (byte)Math.Clamp(config.SlotTimeValue.Value / 10, 0, 255), port));
 
         if (config.TxTailValue.HasValue)
-            frames.Add(BuildParameterFrame(CMD_TXTAIL, (byte)config.TxTailValue.Value, port));
+            frames.Add(BuildParameterFrame(CMD_TXTAIL, (byte)Math.Clamp(config.TxTailValue.Value / 10, 0, 255), port));
 
         if (config.FullDuplexValue.HasValue)
             frames.Add(BuildParameterFrame(CMD_FULLDUPLEX, (byte)(config.FullDuplexValue.Value ? 1 : 0), port));

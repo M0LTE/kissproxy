@@ -798,6 +798,7 @@
                 document.getElementById('global-mqtt-password').placeholder = globalConfig.hasMqttPassword ? 'Password set (enter to change)' : 'Enter password';
                 updateTestTransmissionVisibility();
                 updateCallsignWarning();
+                updateMqttPerModemVisibility();
             } catch (e) {
                 console.error('Failed to load global config:', e);
             }
@@ -835,6 +836,10 @@
                     updateTestTransmissionVisibility();
                     updateCallsignWarning();
                 }
+                if (key === 'mqttServer') {
+                    globalConfig.mqttServer = value || null;
+                    updateMqttPerModemVisibility();
+                }
             } catch (e) {
                 showToast('Failed to update global config: ' + e.message, 'error');
             }
@@ -849,6 +854,13 @@
             } else {
                 card.style.display = 'none';
             }
+        }
+
+        function updateMqttPerModemVisibility() {
+            const show = !!(globalConfig.mqttServer);
+            document.querySelectorAll('.mqtt-per-modem').forEach(el => {
+                el.style.display = show ? '' : 'none';
+            });
         }
 
         function populateModemDropdown() {
@@ -984,6 +996,8 @@
             // Store timestamps for ago updates
             card.dataset.lastToModem = stats.lastFrameToModem || '';
             card.dataset.lastFromModem = stats.lastFrameFromModem || '';
+            card.dataset.lastDataToModem = stats.lastDataFrameToModem || '';
+            card.dataset.lastDataFromModem = stats.lastDataFrameFromModem || '';
 
             // Update last frame info
             if (stats.lastFrameToModemInfo) {
@@ -1105,6 +1119,16 @@
                 const ts = new Date(status.timestamp);
                 setValue('.ninotnc-ts', formatAgo(ts));
             }
+
+            // Pre-select the current effective mode in the dropdown (mode 15 = DIP-only, skip)
+            if (status.currentMode !== null && status.currentMode !== undefined && status.currentMode !== 15) {
+                const card = document.querySelector(`[data-modem-id="${id}"]`);
+                const select = card?.querySelector('.nino-mode-select');
+                if (select && select.value !== String(status.currentMode)) {
+                    select.value = String(status.currentMode);
+                    updateConfig(id, 'ninoMode', status.currentMode);
+                }
+            }
         }
 
         function updateLastFrameInfo(card, direction, info) {
@@ -1164,6 +1188,8 @@
             document.querySelectorAll('[data-modem-id]').forEach(card => {
                 const lastTo = card.dataset.lastToModem;
                 const lastFrom = card.dataset.lastFromModem;
+                const lastDataTo = card.dataset.lastDataToModem;
+                const lastDataFrom = card.dataset.lastDataFromModem;
 
                 const updateAgo = (selector, timestamp) => {
                     const el = card.querySelector(selector);
@@ -1174,6 +1200,8 @@
 
                 updateAgo('.ago-to', lastTo);
                 updateAgo('.ago-from', lastFrom);
+                updateAgo('.ago-data-to', lastDataTo);
+                updateAgo('.ago-data-from', lastDataFrom);
             });
         }
 
@@ -1195,6 +1223,7 @@
         function renderModems() {
             const container = document.getElementById('modems-container');
             container.innerHTML = modems.map(m => renderModemCard(m)).join('');
+            updateMqttPerModemVisibility();
             document.getElementById('no-modems-panel').style.display = modems.length === 0 ? '' : 'none';
         }
 
@@ -1229,11 +1258,13 @@
                         </div>
                         <div class="stat-item">
                             <div class="stat-value stat-data-to">${s.dataFramesToModem || 0}</div>
-                            <div class="stat-label">Data Frames To</div>
+                            <div class="stat-label">Node Tx Frames</div>
+                            <div class="stat-ago ago-data-to">${formatAgo(s.lastDataFrameToModem ? new Date(s.lastDataFrameToModem) : null)}</div>
                         </div>
                         <div class="stat-item">
                             <div class="stat-value stat-data-from">${s.dataFramesFromModem || 0}</div>
-                            <div class="stat-label">Data Frames From</div>
+                            <div class="stat-label">Heard On Air</div>
+                            <div class="stat-ago ago-data-from">${formatAgo(s.lastDataFrameFromModem ? new Date(s.lastDataFrameFromModem) : null)}</div>
                         </div>
                         <div class="stat-item">
                             <div class="stat-value stat-filtered">${s.framesFiltered || 0}</div>
@@ -1368,7 +1399,7 @@
                     <div class="config-section">
                         <div class="section-title">KISS Parameter Controls</div>
                         <div class="kiss-params">
-                            ${renderKissParam(c, 'Control TxDelay', 'filterTxDelay', 'txDelayValue', '× 10ms', '×10ms')}
+                            ${renderKissParam(c, 'Control TxDelay', 'filterTxDelay', 'txDelayValue', 'ms', 'ms')}
                         </div>
                     </div>
 
@@ -1379,6 +1410,25 @@
                         </div>
                         <div class="collapsible-content">
                             <div style="margin-top: 12px;">
+                                <div class="kiss-params">
+                                    ${renderKissParam(c, 'Control TxTail', 'filterTxTail', 'txTailValue', 'ms', 'ms')}
+                                    ${renderKissParam(c, 'Control Slot Time', 'filterSlotTime', 'slotTimeValue', 'ms', 'ms')}
+                                    ${renderKissParam(c, 'Control Persistence', 'filterPersistence', 'persistenceValue', '0–255', '')}
+                                    <div class="kiss-param">
+                                        <label class="toggle">
+                                            <input type="checkbox" ${c.filterSetHardware ? 'checked' : ''} onchange="updateConfig('${c.id}', 'filterSetHardware', this.checked)">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                        <span>Prevent node mode control</span>
+                                    </div>
+                                    <div class="kiss-param">
+                                        <span>Param resend interval</span>
+                                        <input type="number" value="${c.parameterSendInterval ?? 600}" min="0" onchange="updateConfig('${c.id}', 'parameterSendInterval', parseInt(this.value))">
+                                        <span class="kiss-param-unit">s (0 = on connect only)</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mqtt-per-modem" style="margin-top: 15px;">
                                 <div class="section-title" style="font-size: 0.8rem; margin-bottom: 10px;">MQTT (Per-Modem)</div>
                                 <div class="config-grid">
                                     <div class="config-field">
@@ -1391,29 +1441,6 @@
                                             <span class="toggle-slider"></span>
                                         </label>
                                         <span class="toggle-label">Encode to base64</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div style="margin-top: 15px;">
-                                <div class="kiss-params">
-                                    ${renderKissParam(c, 'Control TxTail', 'filterTxTail', 'txTailValue', '× 10ms', '×10ms')}
-                                    ${renderKissParam(c, 'Control Slot Time', 'filterSlotTime', 'slotTimeValue', '× 10ms', '×10ms')}
-                                    ${renderKissParam(c, 'Control Persistence', 'filterPersistence', 'persistenceValue', '0–255', '')}
-                                    <div class="kiss-param">
-                                        <label class="toggle">
-                                            <input type="checkbox" ${c.filterSetHardware ? 'checked' : ''} onchange="updateConfig('${c.id}', 'filterSetHardware', this.checked)">
-                                            <span class="toggle-slider"></span>
-                                        </label>
-                                        <span>Prevent node mode control</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div style="margin-top: 15px;">
-                                <div class="config-field" style="max-width: 260px;">
-                                    <label>Parameter Send Interval (0 = on connect only)</label>
-                                    <div style="display:flex; align-items:center; gap:8px;">
-                                        <input type="number" value="${c.parameterSendInterval ?? 600}" min="0" style="width:100px;" onchange="updateConfig('${c.id}', 'parameterSendInterval', parseInt(this.value))">
-                                        <span class="kiss-param-unit">seconds</span>
                                     </div>
                                 </div>
                             </div>
@@ -1434,9 +1461,9 @@
                         <div class="config-grid">
                             <div class="config-field">
                                 <label>Mode</label>
-                                <select onchange="updateConfig('${c.id}', 'ninoMode', this.value === '' ? null : parseInt(this.value))">
+                                <select class="nino-mode-select" onchange="updateConfig('${c.id}', 'ninoMode', this.value === '' ? null : parseInt(this.value))">
                                     <option value="">Not set</option>
-                                    ${ninoModes.map(m => `<option value="${m.mode}" ${c.ninoMode === m.mode ? 'selected' : ''}>${m.mode}: ${m.name}</option>`).join('')}
+                                    ${ninoModes.filter(m => m.mode !== 15).map(m => `<option value="${m.mode}" ${c.ninoMode === m.mode ? 'selected' : ''}>${m.mode}: ${m.name}</option>`).join('')}
                                 </select>
                             </div>
                             <div class="toggle-field">

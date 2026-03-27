@@ -158,10 +158,11 @@ public static class WebApi
 
                 configManager.UpdateModem(config);
 
-                // Notify the proxy instance of config change
+                // Update the proxy's in-memory config; excludes SETHW so NinoMode
+                // is only sent to the modem on an explicit Apply (POST .../apply).
                 if (proxyInstances.TryGetValue(id, out var proxy))
                 {
-                    proxy.OnConfigChanged(config);
+                    proxy.UpdateConfig(config);
                 }
 
                 return Results.Ok();

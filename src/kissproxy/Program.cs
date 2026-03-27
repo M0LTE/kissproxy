@@ -165,9 +165,9 @@ configManager.ModemConfigChanged += modemId =>
 
     if (proxyInstances.TryGetValue(modemId, out var proxy))
     {
-        // Existing proxy — notify it of the updated config
-        LogInfo($"Config changed for modem '{modemId}'");
-        proxy.OnConfigChanged(newConfig);
+        // Existing proxy — update in-memory config only; do not send params to modem.
+        // Params are sent only on explicit Apply Now (POST .../apply).
+        proxy.UpdateConfig(newConfig);
     }
     else
     {

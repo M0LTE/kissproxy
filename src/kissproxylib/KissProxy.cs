@@ -720,7 +720,7 @@ public class KissProxy
         if (currentConfig.NinoMode.HasValue)
             ackModeTracker.SetMode(currentConfig.NinoMode.Value);
         if (currentConfig.TxDelayValue.HasValue)
-            ackModeTracker.SetTxDelay(currentConfig.TxDelayValue.Value);
+            ackModeTracker.SetTxDelay(currentConfig.TxDelayValue.Value / 10);
 
         var frames = KissFrameBuilder.BuildAllParameterFrames(currentConfig);
         foreach (var frame in frames)
@@ -809,14 +809,27 @@ public class KissProxy
     }
 
     /// <summary>
-    /// Called when config changes. Resends parameters to modem if connected.
+    /// Called when config changes. Resends all parameters (including SETHW/NinoMode) to modem if connected.
+    /// Use this only for explicit "Apply Now" actions.
     /// </summary>
     public void OnConfigChanged(Config newConfig)
     {
         currentConfig = newConfig;
         SendConfiguredParameters();
+        RestartResendTimer();
+    }
 
-        // Restart timer if interval changed
+    /// <summary>
+    /// Updates the in-memory config (for filters etc.) without sending anything to the modem.
+    /// Use OnConfigChanged for explicit applies that should push params to the modem.
+    /// </summary>
+    public void UpdateConfig(Config newConfig)
+    {
+        currentConfig = newConfig;
+    }
+
+    private void RestartResendTimer()
+    {
         StopParameterResendTimer();
         ISerialPort? serialPort;
         lock (serialPortLock)

@@ -594,6 +594,8 @@ public class KissProxy
                 {
                     logger.LogDebug("Filtered frame from node");
                     modemState?.RecordFilteredFrame();
+                    var filtInfo = CreateFrameInfo(frame, outbound: true);
+                    if (filtInfo != null) modemState?.RecordNodeParamCommand(filtInfo, filtered: true);
                     continue;
                 }
 
@@ -859,7 +861,32 @@ public class KissProxy
             }
         }
 
+        // For data frames, extract source callsign from AX.25 header
+        if (command == KissFrameBuilder.CMD_DATAFRAME)
+        {
+            int payloadStart = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
+            // AX.25 layout: dest (7 bytes) then src (7 bytes)
+            if (frame.Length > payloadStart + 14)
+                info.SourceCallsign = ExtractAx25Callsign(frame, payloadStart + 7);
+        }
+
         return info;
+    }
+
+    private static string? ExtractAx25Callsign(byte[] frame, int offset)
+    {
+        if (offset + 7 > frame.Length) return null;
+        var sb = new StringBuilder(6);
+        for (int i = 0; i < 6; i++)
+        {
+            char c = (char)(frame[offset + i] >> 1);
+            if (c == ' ') break;
+            if (!char.IsLetterOrDigit(c)) return null;
+            sb.Append(c);
+        }
+        if (sb.Length == 0) return null;
+        int ssid = (frame[offset + 6] >> 1) & 0x0F;
+        return ssid > 0 ? $"{sb}-{ssid}" : sb.ToString();
     }
 
     private void ProcessByte(List<byte> buffer, bool outbound, byte b, bool emitAsBase64String)

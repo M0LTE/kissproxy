@@ -297,7 +297,61 @@
         }
         .kiss-param input[type="number"] {
             width: 80px;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 0.85rem;
         }
+        .kiss-param input[type="number"]:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        .kiss-param-unit {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        /* Node KISS param status panel */
+        .kiss-param-status-panel {
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+        }
+        .kiss-param-status-title {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        .kiss-param-status-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .kps-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 0.82rem;
+        }
+        .kps-label { color: var(--text-muted); }
+        .kps-value { font-weight: bold; font-family: monospace; }
+        .kps-badge {
+            font-size: 0.7rem;
+            font-weight: bold;
+            padding: 1px 6px;
+            border-radius: 3px;
+        }
+        .kps-badge.passed { background: var(--success); color: white; }
+        .kps-badge.blocked { background: var(--danger); color: white; }
 
         /* Footer actions */
         .modem-actions {
@@ -355,16 +409,47 @@
         .toast.error { background: var(--danger); }
         .toast.warning { background: var(--warning); color: black; }
 
-        /* Unsaved indicator */
-        .unsaved-indicator {
-            display: none;
-            padding: 5px 12px;
+        /* Unsaved changes banner */
+        .unsaved-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1500;
             background: var(--warning);
-            color: black;
-            border-radius: 4px;
-            font-size: 0.85rem;
+            color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            padding: 10px 20px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            transform: translateY(-100%);
+            transition: transform 0.25s ease;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.4);
         }
-        .unsaved-indicator.show { display: block; }
+        .unsaved-banner.show { transform: translateY(0); }
+        .unsaved-banner button {
+            background: rgba(0,0,0,0.2);
+            color: #000;
+            padding: 5px 14px;
+            font-weight: bold;
+        }
+        .unsaved-banner button:hover { background: rgba(0,0,0,0.3); }
+
+        /* Callsign warning */
+        .callsign-warning {
+            background: rgba(255, 152, 0, 0.12);
+            border: 1px solid var(--warning);
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.88rem;
+            color: var(--text);
+            margin-bottom: 20px;
+            display: none;
+        }
+        .callsign-warning strong { color: var(--warning); }
 
         /* NinoTNC Status Panel */
         .ninotnc-status {
@@ -430,6 +515,37 @@
         .setup-note strong { color: var(--warning); }
         .setup-note ul { margin: 4px 0 0 16px; }
         .setup-note li { margin-bottom: 2px; }
+
+        /* Collapsible sections */
+        .collapsible-header {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+        }
+        .collapsible-header:hover .section-title { color: var(--text); }
+        .collapsible-arrow {
+            font-size: 0.7rem;
+            transition: transform 0.2s;
+            color: var(--text-muted);
+        }
+        .collapsible-arrow.open { transform: rotate(90deg); }
+        .collapsible-content { display: none; }
+        .collapsible-content.open { display: block; }
+
+        /* Software control warning */
+        .sw-control-warning {
+            background: rgba(244, 67, 54, 0.12);
+            border-left: 3px solid var(--danger);
+            border-radius: 0 4px 4px 0;
+            padding: 8px 12px;
+            font-size: 0.82rem;
+            color: var(--danger);
+            margin-bottom: 10px;
+            display: none;
+        }
+        .sw-control-warning.show { display: block; }
     </style>
 </head>
 <body>
@@ -441,49 +557,45 @@
         <div id="login-error">Invalid password</div>
     </div>
 
+    <!-- Unsaved changes banner (fixed, slides down from top) -->
+    <div class="unsaved-banner" id="unsaved-banner">
+        Unsaved changes
+        <button onclick="saveConfig()">Save Config</button>
+    </div>
+
     <!-- Main App -->
     <div id="app" class="container">
         <header>
             <h1>KissProxy Manager</h1>
             <div class="header-actions">
-                <span class="unsaved-indicator" id="unsaved-indicator">Unsaved changes</span>
                 <span class="config-status" id="config-status">Checking...</span>
                 <button class="btn-primary" id="save-btn" onclick="saveConfig()">Save Config</button>
                 <button class="btn-secondary" onclick="showAddModem()">Add Modem</button>
             </div>
         </header>
 
-        <!-- Global Settings -->
-        <div class="modem-card" id="global-settings" style="margin-bottom: 20px;">
-            <div class="modem-header">
-                <span class="modem-title">Global Settings</span>
+        <!-- Callsign warning -->
+        <div class="callsign-warning" id="callsign-warning">
+            <strong>My Callsign is not set.</strong> Test transmissions are disabled until a callsign is configured.
+            It will be auto-detected from the next data frame sent by the node.
+        </div>
+
+        <div class="modem-card" id="no-modems-panel" style="display: none; text-align: center; padding: 40px 20px;">
+            <div style="font-size: 2rem; margin-bottom: 15px; color: var(--text-muted);">&#128246;</div>
+            <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">No modems configured</div>
+            <div style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.7; max-width: 480px; margin: 0 auto 20px;">
+                Click <strong>Add Modem</strong> in the top right to get started.<br>
+                You'll need the serial port your TNC is connected to and a TCP port for KISS clients to connect on.
             </div>
-            <div class="config-grid">
-                <div class="config-field">
-                    <label>Web UI Password</label>
-                    <input type="password" id="global-password" placeholder="Enter new password" onchange="updateGlobalConfig('password', this.value)">
-                </div>
-                <div class="config-field">
-                    <label>My Callsign</label>
-                    <input type="text" id="global-mycallsign" placeholder="e.g. VK2ABC" style="text-transform: uppercase" onchange="updateGlobalConfig('myCallsign', this.value.toUpperCase().trim())">
-                </div>
-                <div class="config-field">
-                    <label>MQTT Server</label>
-                    <input type="text" id="global-mqtt-server" placeholder="host:port" onchange="updateGlobalConfig('mqttServer', this.value)">
-                </div>
-                <div class="config-field">
-                    <label>MQTT Username</label>
-                    <input type="text" id="global-mqtt-username" onchange="updateGlobalConfig('mqttUsername', this.value)">
-                </div>
-                <div class="config-field">
-                    <label>MQTT Password</label>
-                    <input type="password" id="global-mqtt-password" placeholder="Enter new password" onchange="updateGlobalConfig('mqttPassword', this.value)">
-                </div>
-            </div>
+            <button class="btn-primary" onclick="showAddModem()">Add Modem</button>
+        </div>
+
+        <div class="modems" id="modems-container">
+            <!-- Modem cards will be inserted here -->
         </div>
 
         <!-- Test Transmission (shown only when My Callsign is set and modems exist) -->
-        <div class="modem-card" id="test-transmission" style="margin-bottom: 20px; display: none;">
+        <div class="modem-card" id="test-transmission" style="margin-top: 20px; display: none;">
             <div class="modem-header">
                 <span class="modem-title">Test Transmission</span>
             </div>
@@ -508,8 +620,36 @@
             </div>
         </div>
 
-        <div class="modems" id="modems-container">
-            <!-- Modem cards will be inserted here -->
+        <!-- Global Settings -->
+        <div class="modem-card" id="global-settings" style="margin-top: 20px;">
+            <div class="collapsible-header" onclick="toggleSection(this)" style="padding: 0;">
+                <span class="modem-title">Global Settings</span>
+                <span class="collapsible-arrow">&#9654;</span>
+            </div>
+            <div class="collapsible-content">
+                <div class="config-grid" style="margin-top: 15px;">
+                    <div class="config-field">
+                        <label>Web UI Password</label>
+                        <input type="password" id="global-password" placeholder="Enter new password" onchange="updateGlobalConfig('password', this.value)">
+                    </div>
+                    <div class="config-field">
+                        <label>My Callsign</label>
+                        <input type="text" id="global-mycallsign" placeholder="e.g. VK2ABC" style="text-transform: uppercase" onchange="updateGlobalConfig('myCallsign', this.value.toUpperCase().trim())">
+                    </div>
+                    <div class="config-field">
+                        <label>MQTT Server</label>
+                        <input type="text" id="global-mqtt-server" placeholder="host:port" onchange="updateGlobalConfig('mqttServer', this.value)">
+                    </div>
+                    <div class="config-field">
+                        <label>MQTT Username</label>
+                        <input type="text" id="global-mqtt-username" onchange="updateGlobalConfig('mqttUsername', this.value)">
+                    </div>
+                    <div class="config-field">
+                        <label>MQTT Password</label>
+                        <input type="password" id="global-mqtt-password" placeholder="Enter new password" onchange="updateGlobalConfig('mqttPassword', this.value)">
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -657,14 +797,20 @@
                 document.getElementById('global-password').placeholder = globalConfig.hasPassword ? 'Password set (enter to change)' : 'Enter password';
                 document.getElementById('global-mqtt-password').placeholder = globalConfig.hasMqttPassword ? 'Password set (enter to change)' : 'Enter password';
                 updateTestTransmissionVisibility();
+                updateCallsignWarning();
             } catch (e) {
                 console.error('Failed to load global config:', e);
             }
         }
 
+        function updateCallsignWarning() {
+            const warn = document.getElementById('callsign-warning');
+            if (warn) warn.style.display = globalConfig.myCallsign ? 'none' : '';
+        }
+
         async function updateGlobalConfig(key, value) {
             hasUnsavedChanges = true;
-            document.getElementById('unsaved-indicator').classList.add('show');
+            document.getElementById('unsaved-banner').classList.add('show');
 
             try {
                 const update = {};
@@ -687,6 +833,7 @@
                 if (key === 'myCallsign') {
                     globalConfig.myCallsign = value || null;
                     updateTestTransmissionVisibility();
+                    updateCallsignWarning();
                 }
             } catch (e) {
                 showToast('Failed to update global config: ' + e.message, 'error');
@@ -841,15 +988,56 @@
             // Update last frame info
             if (stats.lastFrameToModemInfo) {
                 updateLastFrameInfo(card, 'to', stats.lastFrameToModemInfo);
+                // Auto-detect callsign from node's outbound data frames
+                if (!globalConfig.myCallsign && stats.lastFrameToModemInfo.sourceCallsign) {
+                    const detected = stats.lastFrameToModemInfo.sourceCallsign;
+                    globalConfig.myCallsign = detected;
+                    document.getElementById('global-mycallsign').value = detected;
+                    updateGlobalConfig('myCallsign', detected);
+                    showToast(`Callsign auto-detected: ${detected}`, 'success');
+                }
             }
             if (stats.lastFrameFromModemInfo) {
                 updateLastFrameInfo(card, 'from', stats.lastFrameFromModemInfo);
             }
 
+            // Update KISS param status panel
+            updateKissParamStatusPanel(card, stats);
+
             // Update NinoTNC status if available
             if (stats.ninoTncStatus) {
                 updateNinoTncStatus(id, stats.ninoTncStatus);
             }
+        }
+
+        function updateKissParamStatusPanel(card, stats) {
+            const panel = card.querySelector('[id^="kps-"]');
+            if (!panel) return;
+
+            const params = [
+                { key: 'lastNodeTxDelay',     cls: 'txdelay',     label: 'TxDelay',     fmt: v => `${v * 10}ms` },
+                { key: 'lastNodePersistence', cls: 'persistence', label: 'Persistence', fmt: v => `${v}` },
+                { key: 'lastNodeSlotTime',    cls: 'slottime',    label: 'Slot Time',   fmt: v => `${v * 10}ms` },
+                { key: 'lastNodeTxTail',      cls: 'txtail',      label: 'TxTail',      fmt: v => `${v * 10}ms` },
+                { key: 'lastNodeSetHw',       cls: 'sethw',       label: 'SETHW',       fmt: v => `mode ${v & 0x0F}` },
+            ];
+
+            let anyVisible = false;
+            for (const p of params) {
+                const s = stats[p.key];
+                const item = panel.querySelector(`.kps-item-${p.cls}`);
+                if (!item) continue;
+                if (s == null) continue;
+
+                item.style.display = '';
+                anyVisible = true;
+                item.querySelector(`.kps-v-${p.cls}`).textContent = p.fmt(s.value);
+                const badge = item.querySelector(`.kps-b-${p.cls}`);
+                badge.textContent = s.filtered ? 'Blocked' : 'Passed';
+                badge.className = `kps-badge ${s.filtered ? 'blocked' : 'passed'}`;
+            }
+
+            panel.style.display = anyVisible ? '' : 'none';
         }
 
         function updateNinoTncStatus(id, status) {
@@ -872,6 +1060,10 @@
 
             // Check if under software control (DIP switches = 1111)
             const isSoftwareControl = status.boardSwitchModeBinary === '1111';
+
+            // Flag when not in software control mode
+            const swWarning = panel.querySelector('.sw-control-warning');
+            if (swWarning) swWarning.classList.toggle('show', !isSoftwareControl);
 
             // Check if we have an applied mode from UI that should override display
             const appliedMode = appliedModes[id];
@@ -1003,6 +1195,7 @@
         function renderModems() {
             const container = document.getElementById('modems-container');
             container.innerHTML = modems.map(m => renderModemCard(m)).join('');
+            document.getElementById('no-modems-panel').style.display = modems.length === 0 ? '' : 'none';
         }
 
         function renderModemCard(modem) {
@@ -1056,6 +1249,37 @@
                         </div>
                     </div>
 
+                    <div class="kiss-param-status-panel" id="kps-${c.id}" style="display:none;">
+                        <div class="kiss-param-status-title">KISS Parameters from Node</div>
+                        <div class="kiss-param-status-grid">
+                            <div class="kps-item kps-item-txdelay" style="display:none;">
+                                <span class="kps-label">TxDelay</span>
+                                <span class="kps-value kps-v-txdelay">-</span>
+                                <span class="kps-badge kps-b-txdelay">-</span>
+                            </div>
+                            <div class="kps-item kps-item-persistence" style="display:none;">
+                                <span class="kps-label">Persistence</span>
+                                <span class="kps-value kps-v-persistence">-</span>
+                                <span class="kps-badge kps-b-persistence">-</span>
+                            </div>
+                            <div class="kps-item kps-item-slottime" style="display:none;">
+                                <span class="kps-label">Slot Time</span>
+                                <span class="kps-value kps-v-slottime">-</span>
+                                <span class="kps-badge kps-b-slottime">-</span>
+                            </div>
+                            <div class="kps-item kps-item-txtail" style="display:none;">
+                                <span class="kps-label">TxTail</span>
+                                <span class="kps-value kps-v-txtail">-</span>
+                                <span class="kps-badge kps-b-txtail">-</span>
+                            </div>
+                            <div class="kps-item kps-item-sethw" style="display:none;">
+                                <span class="kps-label">SETHW</span>
+                                <span class="kps-value kps-v-sethw">-</span>
+                                <span class="kps-badge kps-b-sethw">-</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="last-frame">
                         <div class="last-frame-header">Last Frame Activity</div>
                         <div class="last-frame-to">No frames yet</div>
@@ -1067,6 +1291,7 @@
                             <span class="ninotnc-title">NinoTNC Status (TX Test)</span>
                             <span class="ninotnc-timestamp ninotnc-ts"></span>
                         </div>
+                        <div class="sw-control-warning">&#9888; DIP switches are not set to 1111 &mdash; modem is not in software control mode. Set Mode DIP switches to 1111 to enable software control.</div>
                         <div class="ninotnc-grid">
                             <div class="ninotnc-item">
                                 <div class="ninotnc-label">Firmware</div>
@@ -1108,81 +1333,89 @@
                     </div>
 
                     <div class="config-section">
-                        <div class="section-title">Connection Settings</div>
-                        <div class="config-grid">
-                            <div class="config-field">
-                                <label>Serial Port</label>
-                                <select onchange="updateConfig('${c.id}', 'comPort', this.value)">
-                                    ${serialPorts.map(p => `<option value="${p.path}" ${c.comPort === p.path ? 'selected' : ''}>${p.displayName}</option>`).join('')}
-                                    <option value="${c.comPort}" ${!serialPorts.find(p => p.path === c.comPort) ? 'selected' : ''}>${c.comPort}</option>
-                                </select>
-                            </div>
-                            <div class="config-field">
-                                <label>Baud Rate</label>
-                                <input type="number" value="${c.baud}" onchange="updateConfig('${c.id}', 'baud', parseInt(this.value))">
-                            </div>
-                            <div class="config-field">
-                                <label>TCP Port</label>
-                                <input type="number" value="${c.tcpPort}" onchange="updateConfig('${c.id}', 'tcpPort', parseInt(this.value))">
-                            </div>
-                            <div class="toggle-field">
-                                <label class="toggle">
-                                    <input type="checkbox" ${c.anyHost ? 'checked' : ''} onchange="updateConfig('${c.id}', 'anyHost', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <span class="toggle-label">Allow External Connections</span>
+                        <div class="collapsible-header" onclick="toggleSection(this)">
+                            <span class="section-title">Connection Settings</span>
+                            <span class="collapsible-arrow">&#9654;</span>
+                        </div>
+                        <div class="collapsible-content">
+                            <div class="config-grid" style="margin-top: 12px;">
+                                <div class="config-field">
+                                    <label>Serial Port</label>
+                                    <select onchange="updateConfig('${c.id}', 'comPort', this.value)">
+                                        ${serialPorts.map(p => `<option value="${p.path}" ${c.comPort === p.path ? 'selected' : ''}>${p.displayName}</option>`).join('')}
+                                        <option value="${c.comPort}" ${!serialPorts.find(p => p.path === c.comPort) ? 'selected' : ''}>${c.comPort}</option>
+                                    </select>
+                                </div>
+                                <div class="config-field">
+                                    <label>Baud Rate</label>
+                                    <input type="number" value="${c.baud}" onchange="updateConfig('${c.id}', 'baud', parseInt(this.value))">
+                                </div>
+                                <div class="config-field">
+                                    <label>TCP Port</label>
+                                    <input type="number" value="${c.tcpPort}" onchange="updateConfig('${c.id}', 'tcpPort', parseInt(this.value))">
+                                </div>
+                                <div class="toggle-field">
+                                    <label class="toggle">
+                                        <input type="checkbox" ${c.anyHost ? 'checked' : ''} onchange="updateConfig('${c.id}', 'anyHost', this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <span class="toggle-label">Allow External Connections</span>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <div class="config-section">
-                        <div class="section-title">MQTT Settings (Per-Modem)</div>
-                        <div class="config-grid">
-                            <div class="config-field">
-                                <label>Topic Prefix (optional, overrides modem ID)</label>
-                                <input type="text" value="${c.mqttTopicPrefix || ''}" placeholder="e.g. myrig/2m" onchange="updateConfig('${c.id}', 'mqttTopicPrefix', this.value || null)">
-                            </div>
-                            <div class="toggle-field">
-                                <label class="toggle">
-                                    <input type="checkbox" ${c.base64 ? 'checked' : ''} onchange="updateConfig('${c.id}', 'base64', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <span class="toggle-label">Base64 Encoding</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="config-section">
-                        <div class="section-title">KISS Parameter Filtering</div>
+                        <div class="section-title">KISS Parameter Controls</div>
                         <div class="kiss-params">
-                            ${renderKissParam(c, 'TxDelay', 'filterTxDelay', 'txDelayValue', '10ms units')}
-                            ${renderKissParam(c, 'Persistence', 'filterPersistence', 'persistenceValue', '0-255')}
-                            ${renderKissParam(c, 'SlotTime', 'filterSlotTime', 'slotTimeValue', '10ms units')}
-                            ${renderKissParam(c, 'TxTail', 'filterTxTail', 'txTailValue', '10ms units')}
-                            <div class="kiss-param">
-                                <label class="toggle">
-                                    <input type="checkbox" ${c.filterFullDuplex ? 'checked' : ''} onchange="updateConfig('${c.id}', 'filterFullDuplex', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <span>Filter FullDuplex</span>
-                                <label class="toggle">
-                                    <input type="checkbox" ${c.fullDuplexValue ? 'checked' : ''} onchange="updateConfig('${c.id}', 'fullDuplexValue', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <span>FullDuplex</span>
-                            </div>
-                            <div class="kiss-param">
-                                <label class="toggle">
-                                    <input type="checkbox" ${c.filterSetHardware ? 'checked' : ''} onchange="updateConfig('${c.id}', 'filterSetHardware', this.checked)">
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <span>Filter SetHardware</span>
-                            </div>
+                            ${renderKissParam(c, 'Control TxDelay', 'filterTxDelay', 'txDelayValue', '× 10ms', '×10ms')}
                         </div>
-                        <div class="config-grid" style="margin-top: 15px;">
-                            <div class="config-field">
-                                <label>Parameter Send Interval (seconds, 0 = on connect only)</label>
-                                <input type="number" value="${c.parameterSendInterval || 0}" min="0" onchange="updateConfig('${c.id}', 'parameterSendInterval', parseInt(this.value))">
+                    </div>
+
+                    <div class="config-section">
+                        <div class="collapsible-header" onclick="toggleSection(this)">
+                            <span class="section-title">Advanced</span>
+                            <span class="collapsible-arrow">&#9654;</span>
+                        </div>
+                        <div class="collapsible-content">
+                            <div style="margin-top: 12px;">
+                                <div class="section-title" style="font-size: 0.8rem; margin-bottom: 10px;">MQTT (Per-Modem)</div>
+                                <div class="config-grid">
+                                    <div class="config-field">
+                                        <label>Topic Prefix (optional, overrides modem ID)</label>
+                                        <input type="text" value="${c.mqttTopicPrefix || ''}" placeholder="e.g. myrig/2m" onchange="updateConfig('${c.id}', 'mqttTopicPrefix', this.value || null)">
+                                    </div>
+                                    <div class="toggle-field">
+                                        <label class="toggle">
+                                            <input type="checkbox" ${c.base64 ? 'checked' : ''} onchange="updateConfig('${c.id}', 'base64', this.checked)">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                        <span class="toggle-label">Encode to base64</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 15px;">
+                                <div class="kiss-params">
+                                    ${renderKissParam(c, 'Control TxTail', 'filterTxTail', 'txTailValue', '× 10ms', '×10ms')}
+                                    ${renderKissParam(c, 'Control Slot Time', 'filterSlotTime', 'slotTimeValue', '× 10ms', '×10ms')}
+                                    ${renderKissParam(c, 'Control Persistence', 'filterPersistence', 'persistenceValue', '0–255', '')}
+                                    <div class="kiss-param">
+                                        <label class="toggle">
+                                            <input type="checkbox" ${c.filterSetHardware ? 'checked' : ''} onchange="updateConfig('${c.id}', 'filterSetHardware', this.checked)">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                        <span>Prevent node mode control</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 15px;">
+                                <div class="config-field" style="max-width: 260px;">
+                                    <label>Parameter Send Interval (0 = on connect only)</label>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <input type="number" value="${c.parameterSendInterval ?? 600}" min="0" style="width:100px;" onchange="updateConfig('${c.id}', 'parameterSendInterval', parseInt(this.value))">
+                                        <span class="kiss-param-unit">seconds</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1224,17 +1457,31 @@
             `;
         }
 
-        function renderKissParam(config, label, filterKey, valueKey, hint) {
+        function toggleSection(header) {
+            const arrow = header.querySelector('.collapsible-arrow');
+            const content = header.nextElementSibling;
+            if (content) {
+                content.classList.toggle('open');
+                if (arrow) arrow.classList.toggle('open');
+            }
+        }
+
+        function renderKissParam(config, label, filterKey, valueKey, placeholder, unit) {
             const filterId = config.id;
+            const enabled = !!config[filterKey];
             return `
                 <div class="kiss-param">
                     <label class="toggle">
-                        <input type="checkbox" ${config[filterKey] ? 'checked' : ''} onchange="updateConfig('${filterId}', '${filterKey}', this.checked)">
+                        <input type="checkbox" ${enabled ? 'checked' : ''}
+                               onchange="updateConfig('${filterId}', '${filterKey}', this.checked);
+                                         this.closest('.kiss-param').querySelector('input[type=number]').disabled = !this.checked;">
                         <span class="toggle-slider"></span>
                     </label>
-                    <span>Filter ${label}</span>
-                    <input type="number" value="${config[valueKey] || ''}" placeholder="${hint}"
+                    <span>${label}</span>
+                    <input type="number" value="${config[valueKey] ?? ''}" placeholder="${placeholder}"
+                           ${enabled ? '' : 'disabled'}
                            onchange="updateConfig('${filterId}', '${valueKey}', this.value === '' ? null : parseInt(this.value))">
+                    ${unit ? `<span class="kiss-param-unit">${unit}</span>` : ''}
                 </div>
             `;
         }
@@ -1245,7 +1492,7 @@
 
             modem.config[key] = value;
             hasUnsavedChanges = true;
-            document.getElementById('unsaved-indicator').classList.add('show');
+            document.getElementById('unsaved-banner').classList.add('show');
 
             try {
                 await api('PUT', `/modems/${id}`, modem.config);
@@ -1300,7 +1547,7 @@
             try {
                 await api('POST', '/save');
                 hasUnsavedChanges = false;
-                document.getElementById('unsaved-indicator').classList.remove('show');
+                document.getElementById('unsaved-banner').classList.remove('show');
                 showToast('Config saved successfully', 'success');
             } catch (e) {
                 showToast('Failed to save config: ' + e.message, 'error');
@@ -1317,16 +1564,19 @@
                 populateModemDropdown();
                 updateTestTransmissionVisibility();
                 hasUnsavedChanges = true;
-                document.getElementById('unsaved-indicator').classList.add('show');
+                document.getElementById('unsaved-banner').classList.add('show');
                 showToast('Modem removed', 'success');
             } catch (e) {
                 showToast('Failed to remove modem: ' + e.message, 'error');
             }
         }
 
-        function showAddModem() {
-            // Populate serial port dropdown
+        async function showAddModem() {
+            // Refresh serial port list from OS before showing
             const select = document.getElementById('new-modem-port');
+            select.innerHTML = '<option value="">Loading...</option>';
+            document.getElementById('add-modem-modal').classList.add('active');
+            await loadSerialPorts();
             select.innerHTML = serialPorts.map(p => `<option value="${p.path}">${p.displayName}</option>`).join('');
             if (serialPorts.length === 0) {
                 select.innerHTML = '<option value="">No ports found</option>';
@@ -1340,8 +1590,6 @@
 
             // Clear stale values from a previous open
             document.getElementById('new-modem-id').value = '';
-
-            document.getElementById('add-modem-modal').classList.add('active');
         }
 
         function hideAddModem() {
@@ -1370,9 +1618,8 @@
                 filterPersistence: false,
                 filterSlotTime: false,
                 filterTxTail: false,
-                filterFullDuplex: false,
                 filterSetHardware: false,
-                parameterSendInterval: 0,
+                parameterSendInterval: 600,
                 persistNinoMode: false
             };
 
@@ -1382,7 +1629,7 @@
                 hideAddModem();
                 await loadModems();
                 hasUnsavedChanges = true;
-                document.getElementById('unsaved-indicator').classList.add('show');
+                document.getElementById('unsaved-banner').classList.add('show');
                 showToast('Modem added successfully', 'success');
             } catch (e) {
                 showToast('Failed to add modem: ' + e.message, 'error');

@@ -260,6 +260,12 @@ public class FrameInfo
 }
 
 /// <summary>
+/// Tracks the most recent value sent by the node for a KISS parameter command,
+/// and whether it was passed through to the modem or filtered.
+/// </summary>
+public record KissParamStatus(int Value, bool Filtered);
+
+/// <summary>
 /// Runtime state for a single modem, including live statistics.
 /// </summary>
 public class ModemState
@@ -295,6 +301,13 @@ public class ModemState
     public bool? CurrentFullDuplex { get; set; }
     public int? CurrentNinoMode { get; set; }
 
+    // Last parameter command from node (value + whether it was passed or filtered)
+    public KissParamStatus? LastNodeTxDelay { get; set; }
+    public KissParamStatus? LastNodePersistence { get; set; }
+    public KissParamStatus? LastNodeSlotTime { get; set; }
+    public KissParamStatus? LastNodeTxTail { get; set; }
+    public KissParamStatus? LastNodeSetHw { get; set; }
+
     // NinoTNC status from TX Test frame
     public NinoTncStatus? NinoTncStatus { get; set; }
 
@@ -328,6 +341,9 @@ public class ModemState
 
                 // Update current parameter values
                 UpdateCurrentParameters(info);
+
+                // Track pass/filter status for node param commands
+                RecordNodeParamCommand(info, filtered: false);
             }
         }
         OnStateChanged?.Invoke();
@@ -417,6 +433,30 @@ public class ModemState
         }
     }
 
+    /// <summary>
+    /// Records a parameter command from the node, whether it was passed through or filtered.
+    /// Call this for every inbound parameter frame from the node.
+    /// </summary>
+    public void RecordNodeParamCommand(FrameInfo info, bool filtered)
+    {
+        if (!info.ParameterValue.HasValue)
+            return;
+
+        var status = new KissParamStatus(info.ParameterValue.Value, filtered);
+
+        lock (lockObj)
+        {
+            switch (info.CommandCode)
+            {
+                case KissFrameBuilder.CMD_TXDELAY:     LastNodeTxDelay     = status; break;
+                case KissFrameBuilder.CMD_PERSISTENCE: LastNodePersistence = status; break;
+                case KissFrameBuilder.CMD_SLOTTIME:    LastNodeSlotTime    = status; break;
+                case KissFrameBuilder.CMD_TXTAIL:      LastNodeTxTail      = status; break;
+                case KissFrameBuilder.CMD_SETHW:       LastNodeSetHw       = status; break;
+            }
+        }
+    }
+
     private void UpdateCurrentParameters(FrameInfo info)
     {
         if (!info.ParameterValue.HasValue)
@@ -500,6 +540,11 @@ public class ModemState
                 CurrentTxTail = CurrentTxTail,
                 CurrentFullDuplex = CurrentFullDuplex,
                 CurrentNinoMode = CurrentNinoMode,
+                LastNodeTxDelay = LastNodeTxDelay,
+                LastNodePersistence = LastNodePersistence,
+                LastNodeSlotTime = LastNodeSlotTime,
+                LastNodeTxTail = LastNodeTxTail,
+                LastNodeSetHw = LastNodeSetHw,
                 NinoTncStatus = NinoTncStatus
             };
         }

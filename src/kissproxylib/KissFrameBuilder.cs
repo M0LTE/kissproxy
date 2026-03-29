@@ -156,6 +156,24 @@ public static class KissFrameBuilder
     }
 
     /// <summary>
+    /// Formats a KISS parameter value for human-readable logging, per the KISS TNC protocol spec.
+    /// TxDelay/SlotTime/TxTail are in 10ms units; Persistence is a raw 0-255 value
+    /// where p = (P+1)/256; FullDuplex is 0=half, nonzero=full.
+    /// </summary>
+    public static string FormatParameterValue(byte command, int value)
+    {
+        return command switch
+        {
+            CMD_TXDELAY => $"{value} (= {value * 10}ms, spec: value × 10ms)",
+            CMD_PERSISTENCE => $"{value} (= p {(value + 1) / 256.0:F3}, spec: p = (P+1)/256)",
+            CMD_SLOTTIME => $"{value} (= {value * 10}ms, spec: value × 10ms)",
+            CMD_TXTAIL => $"{value} (= {value * 10}ms, spec: value × 10ms)",
+            CMD_FULLDUPLEX => $"{value} (= {(value != 0 ? "full duplex" : "half duplex")})",
+            _ => $"{value}"
+        };
+    }
+
+    /// <summary>
     /// Builds a complete KISS frame for a single-byte parameter command.
     /// </summary>
     public static byte[] BuildParameterFrame(byte command, byte value, int port = 0)

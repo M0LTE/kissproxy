@@ -61,6 +61,125 @@ public class ModemStateTests
         state.CurrentTxDelay.Should().Be(50);
     }
 
+    // --- KISS parameter extraction and state tracking per spec ---
+
+    /// <summary>
+    /// Verifies that all 5 standard KISS parameter commands store the raw byte value
+    /// in the correct CurrentXxx property when received from the modem side.
+    /// Raw values are in 10ms units for time params, 0-255 for persistence.
+    /// </summary>
+    [Theory]
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 10)]      // 10 × 10ms = 100ms
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 50)]       // 50 × 10ms = 500ms (spec default)
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 255)]      // max
+    [InlineData(KissFrameBuilder.CMD_PERSISTENCE, 0)]    // p = 1/256
+    [InlineData(KissFrameBuilder.CMD_PERSISTENCE, 63)]   // spec default, p = 0.25
+    [InlineData(KissFrameBuilder.CMD_PERSISTENCE, 127)]  // p = 0.5
+    [InlineData(KissFrameBuilder.CMD_PERSISTENCE, 255)]  // p = 1.0
+    [InlineData(KissFrameBuilder.CMD_SLOTTIME, 0)]
+    [InlineData(KissFrameBuilder.CMD_SLOTTIME, 10)]      // spec default, 100ms
+    [InlineData(KissFrameBuilder.CMD_TXTAIL, 0)]
+    [InlineData(KissFrameBuilder.CMD_TXTAIL, 30)]        // 300ms
+    public void UpdateCurrentParameters_StoresRawByteValue(byte command, int value)
+    {
+        var state = new ModemState { Id = "test" };
+        var frame = new byte[] { 0xC0, command, (byte)value, 0xC0 };
+        var info = new FrameInfo { CommandCode = command, ParameterValue = value };
+
+        state.RecordFrameToModem(frame, info);
+
+        var actual = command switch
+        {
+            KissFrameBuilder.CMD_TXDELAY => state.CurrentTxDelay,
+            KissFrameBuilder.CMD_PERSISTENCE => state.CurrentPersistence,
+            KissFrameBuilder.CMD_SLOTTIME => state.CurrentSlotTime,
+            KissFrameBuilder.CMD_TXTAIL => state.CurrentTxTail,
+            _ => null
+        };
+        actual.Should().Be(value);
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void UpdateCurrentParameters_FullDuplex_StoresBoolean(int wireValue, bool expected)
+    {
+        var state = new ModemState { Id = "test" };
+        var frame = new byte[] { 0xC0, KissFrameBuilder.CMD_FULLDUPLEX, (byte)wireValue, 0xC0 };
+        var info = new FrameInfo
+        {
+            CommandCode = KissFrameBuilder.CMD_FULLDUPLEX,
+            ParameterValue = wireValue
+        };
+
+        state.RecordFrameToModem(frame, info);
+
+        state.CurrentFullDuplex.Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Verifies RecordNodeParamCommand tracks parameters sent by the node,
+    /// storing the raw byte value and whether the frame was filtered.
+    /// </summary>
+    [Fact]
+    public void RecordNodeParamCommand_TracksAllParameterTypes()
+    {
+        var state = new ModemState { Id = "test" };
+        var paramTests = new (byte cmd, int value, bool filtered)[]
+        {
+            (KissFrameBuilder.CMD_TXDELAY, 10, false),      // 100ms, passed through
+            (KissFrameBuilder.CMD_PERSISTENCE, 63, true),    // blocked by filter
+            (KissFrameBuilder.CMD_SLOTTIME, 10, false),
+            (KissFrameBuilder.CMD_TXTAIL, 30, false),        // 300ms
+        };
+
+        foreach (var (cmd, value, filtered) in paramTests)
+        {
+            var info = new FrameInfo { CommandCode = cmd, ParameterValue = value };
+            state.RecordNodeParamCommand(info, filtered);
+        }
+
+        state.LastNodeTxDelay.Should().NotBeNull();
+        state.LastNodeTxDelay!.Value.Should().Be(10);
+        state.LastNodeTxDelay.Filtered.Should().BeFalse();
+
+        state.LastNodePersistence.Should().NotBeNull();
+        state.LastNodePersistence!.Value.Should().Be(63);
+        state.LastNodePersistence.Filtered.Should().BeTrue();
+
+        state.LastNodeSlotTime.Should().NotBeNull();
+        state.LastNodeSlotTime!.Value.Should().Be(10);
+
+        state.LastNodeTxTail.Should().NotBeNull();
+        state.LastNodeTxTail!.Value.Should().Be(30);
+    }
+
+    /// <summary>
+    /// Verifies that parameter values survive Snapshot() — essential for SSE delivery to UI.
+    /// </summary>
+    [Fact]
+    public void Snapshot_IncludesAllKissParameters()
+    {
+        var state = new ModemState { Id = "test" };
+
+        // Set current params (from modem side)
+        state.RecordFrameToModem(new byte[] { 0xC0, 0x01, 50, 0xC0 },
+            new FrameInfo { CommandCode = KissFrameBuilder.CMD_TXDELAY, ParameterValue = 50 });
+        state.RecordFrameToModem(new byte[] { 0xC0, 0x02, 63, 0xC0 },
+            new FrameInfo { CommandCode = KissFrameBuilder.CMD_PERSISTENCE, ParameterValue = 63 });
+
+        // Set node params
+        state.RecordNodeParamCommand(
+            new FrameInfo { CommandCode = KissFrameBuilder.CMD_TXDELAY, ParameterValue = 10 }, false);
+
+        var snap = state.Snapshot();
+
+        snap.CurrentTxDelay.Should().Be(50);
+        snap.CurrentPersistence.Should().Be(63);
+        snap.LastNodeTxDelay.Should().NotBeNull();
+        snap.LastNodeTxDelay!.Value.Should().Be(10);
+    }
+
     [Fact]
     public void RecordFilteredFrame_IncrementsFilteredCounter()
     {

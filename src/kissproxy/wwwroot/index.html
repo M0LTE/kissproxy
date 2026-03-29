@@ -694,6 +694,7 @@
         let serialPorts = [];
         let globalConfig = {};
         let tcpPortHighWaterMark = 8909; // Tracks the highest TCP port ever seen/added this session
+        const collapsedModems = new Set(); // Tracks which modem cards are collapsed
         let appliedModes = {};  // Track modes applied via UI (modemId -> modeNum)
         let configWriteable = false;
         let hasUnsavedChanges = false;
@@ -927,6 +928,11 @@
                 const maxLoaded = modems.reduce((max, m) => Math.max(max, m.config.tcpPort || 0), 0);
                 tcpPortHighWaterMark = Math.max(tcpPortHighWaterMark, maxLoaded);
                 renderModems();
+                // Apply already-fetched state immediately so panels (e.g. NinoTNC status)
+                // are visible without waiting for the first SSE event.
+                for (const modem of modems) {
+                    if (modem.state) updateModemStats(modem.config.id, modem.state);
+                }
                 populateModemDropdown();
                 updateTestTransmissionVisibility();
             } catch (e) {
@@ -1126,7 +1132,13 @@
                 const select = card?.querySelector('.nino-mode-select');
                 if (select && select.value !== String(status.currentMode)) {
                     select.value = String(status.currentMode);
-                    updateConfig(id, 'ninoMode', status.currentMode);
+                    // Sync in-memory config and API silently — this is telemetry-driven,
+                    // not a user action, so don't mark unsaved changes.
+                    const modem = modems.find(m => m.config.id === id);
+                    if (modem) {
+                        modem.config.ninoMode = status.currentMode;
+                        api('PUT', `/modems/${id}`, modem.config).catch(() => {});
+                    }
                 }
             }
         }
@@ -1231,10 +1243,14 @@
             const c = modem.config;
             const s = modem.state || {};
 
+            const collapsed = collapsedModems.has(c.id);
             return `
                 <div class="modem-card" data-modem-id="${c.id}">
-                    <div class="modem-header">
-                        <span class="modem-title">${c.id}</span>
+                    <div class="modem-header" onclick="toggleModemCollapse('${c.id}')" style="cursor:pointer; user-select:none; margin-bottom:${collapsed ? '0' : '15px'};">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span class="collapsible-arrow ${collapsed ? '' : 'open'}">&#9654;</span>
+                            <span class="modem-title">${c.id}</span>
+                        </div>
                         <div class="modem-status">
                             <span class="status-badge node-status ${s.nodeConnected ? 'connected' : 'disconnected'}">
                                 ${s.nodeConnected ? 'Node Connected' : 'Node Disconnected'}
@@ -1245,6 +1261,7 @@
                         </div>
                     </div>
 
+                    <div class="${collapsed ? '' : 'open'} collapsible-content">
                     <div class="stats-panel">
                         <div class="stat-item">
                             <div class="stat-value stat-frames-to">${s.framesToModem || 0}</div>
@@ -1480,8 +1497,23 @@
                         <button class="btn-success" onclick="applyConfig('${c.id}')">Apply Now</button>
                         <button class="btn-danger" onclick="removeModem('${c.id}')">Remove Modem</button>
                     </div>
+                    </div>
                 </div>
             `;
+        }
+
+        function toggleModemCollapse(id) {
+            if (collapsedModems.has(id)) {
+                collapsedModems.delete(id);
+            } else {
+                collapsedModems.add(id);
+            }
+            // Re-render just this card to reflect the new state
+            const card = document.querySelector(`.modem-card[data-modem-id="${id}"]`);
+            if (card) {
+                const modem = modems.find(m => m.config.id === id);
+                if (modem) card.outerHTML = renderModemCard(modem);
+            }
         }
 
         function toggleSection(header) {

@@ -953,7 +953,11 @@ public class KissProxy
                 commandCode == KissCommandCode.TxDelay || commandCode == KissCommandCode.TxTail ||
                 commandCode == KissCommandCode.FullDuplex)
             {
-                logger.LogInformation("{command} set to {value}", commandCode, ToNumbers(ax25Frame));
+                var cmdByte = (byte)(int)commandCode;
+                var displayValue = ax25Frame.Length >= 1
+                    ? KissFrameBuilder.FormatParameterValue(cmdByte, ax25Frame[0])
+                    : ToNumbers(ax25Frame);
+                logger.LogInformation("{command} set to {value}", commandCode, displayValue);
                 return;
             }
 

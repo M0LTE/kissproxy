@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 namespace kissproxy;
 
@@ -100,39 +101,33 @@ public static class WebApi
             ctx.Response.Headers.CacheControl = "no-cache";
             ctx.Response.Headers.Connection = "keep-alive";
 
-            // Send initial state for all modems
+            // Use a channel to serialize SSE writes — StateChanged fires from multiple threads
+            // (serial reader + TCP reader) and concurrent writes to the response body corrupt
+            // the SSE stream, causing the browser to drop events.
+            var channel = Channel.CreateUnbounded<(string id, ModemState state)>(
+                new UnboundedChannelOptions { SingleReader = true });
+
+            // Queue initial state for all modems
             foreach (var modem in configManager.Config.Modems)
             {
                 var state = stateManager.GetSnapshot(modem.Id);
                 if (state != null)
-                {
-                    await SendSseEvent(ctx, modem.Id, state, cancellationToken);
-                }
+                    channel.Writer.TryWrite((modem.Id, state));
             }
 
-            // Subscribe to state changes
             void OnStateChanged(string id, ModemState state)
             {
-                // Send update via SSE (fire and forget)
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await SendSseEvent(ctx, id, state, cancellationToken);
-                    }
-                    catch
-                    {
-                        // Client disconnected or shutdown, ignore
-                    }
-                }, cancellationToken);
+                channel.Writer.TryWrite((id, state));
             }
 
             stateManager.StateChanged += OnStateChanged;
 
             try
             {
-                // Keep connection alive until cancelled (client disconnect or app shutdown)
-                await Task.Delay(Timeout.Infinite, cancellationToken);
+                await foreach (var (id, state) in channel.Reader.ReadAllAsync(cancellationToken))
+                {
+                    await SendSseEvent(ctx, id, state, cancellationToken);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -141,6 +136,7 @@ public static class WebApi
             finally
             {
                 stateManager.StateChanged -= OnStateChanged;
+                channel.Writer.TryComplete();
             }
         });
 

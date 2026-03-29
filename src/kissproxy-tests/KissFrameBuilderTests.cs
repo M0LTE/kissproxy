@@ -157,6 +157,146 @@ public class KissFrameBuilderTests
         frames.Should().BeEmpty();
     }
 
+    // --- KISS spec compliance tests (https://github.com/packethacking/ax25spec/blob/main/doc/kiss-tnc-protocol.md#4-control-of-the-kiss-tnc) ---
+
+    /// <summary>
+    /// Per KISS spec: TxDelay is in 10ms units. Config stores ms, wire format is ms/10.
+    /// Default start-up value per spec: 50 (= 500ms).
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0)]        // 0ms → wire byte 0
+    [InlineData(100, 10)]     // 100ms → wire byte 10
+    [InlineData(500, 50)]     // 500ms (spec default) → wire byte 50
+    [InlineData(2550, 255)]   // max → wire byte 255
+    [InlineData(2560, 255)]   // clamped to 255
+    public void BuildAllParameterFrames_TxDelay_ConvertsMsTo10msUnits(int configMs, byte expectedWireByte)
+    {
+        var config = new Config { Id = "t", ComPort = "x", TxDelayValue = configMs };
+        var frames = KissFrameBuilder.BuildAllParameterFrames(config);
+        frames.Should().HaveCount(1);
+        frames[0].Should().Equal(FEND, 0x01, expectedWireByte, FEND);
+    }
+
+    /// <summary>
+    /// Per KISS spec: SlotTime is in 10ms units. Default: 10 (= 100ms).
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(100, 10)]     // spec default → wire byte 10
+    [InlineData(500, 50)]
+    [InlineData(2550, 255)]
+    public void BuildAllParameterFrames_SlotTime_ConvertsMsTo10msUnits(int configMs, byte expectedWireByte)
+    {
+        var config = new Config { Id = "t", ComPort = "x", SlotTimeValue = configMs };
+        var frames = KissFrameBuilder.BuildAllParameterFrames(config);
+        frames.Should().HaveCount(1);
+        frames[0].Should().Equal(FEND, 0x03, expectedWireByte, FEND);
+    }
+
+    /// <summary>
+    /// Per KISS spec: TxTail is in 10ms units.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(300, 30)]
+    [InlineData(2550, 255)]
+    public void BuildAllParameterFrames_TxTail_ConvertsMsTo10msUnits(int configMs, byte expectedWireByte)
+    {
+        var config = new Config { Id = "t", ComPort = "x", TxTailValue = configMs };
+        var frames = KissFrameBuilder.BuildAllParameterFrames(config);
+        frames.Should().HaveCount(1);
+        frames[0].Should().Equal(FEND, 0x04, expectedWireByte, FEND);
+    }
+
+    /// <summary>
+    /// Per KISS spec: Persistence (P) is a raw byte 0-255. p = (P+1)/256.
+    /// Default: P=63 (p ≈ 0.25).
+    /// The config value IS the raw byte — no conversion on the wire.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0)]        // p = 1/256 ≈ 0.004
+    [InlineData(63, 63)]      // spec default: p = 64/256 = 0.25
+    [InlineData(127, 127)]    // p = 128/256 = 0.5
+    [InlineData(255, 255)]    // p = 256/256 = 1.0 (always transmit)
+    public void BuildAllParameterFrames_Persistence_RawByteNoConversion(int configValue, byte expectedWireByte)
+    {
+        var config = new Config { Id = "t", ComPort = "x", PersistenceValue = configValue };
+        var frames = KissFrameBuilder.BuildAllParameterFrames(config);
+        frames.Should().HaveCount(1);
+        frames[0].Should().Equal(FEND, 0x02, expectedWireByte, FEND);
+    }
+
+    /// <summary>
+    /// Per KISS spec: FullDuplex is 0 for half duplex, nonzero for full duplex.
+    /// </summary>
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public void BuildAllParameterFrames_FullDuplex_BooleanToWireByte(bool configValue, byte expectedWireByte)
+    {
+        var config = new Config { Id = "t", ComPort = "x", FullDuplexValue = configValue };
+        var frames = KissFrameBuilder.BuildAllParameterFrames(config);
+        frames.Should().HaveCount(1);
+        frames[0].Should().Equal(FEND, 0x05, expectedWireByte, FEND);
+    }
+
+    /// <summary>
+    /// Per KISS spec: TxDelay, SlotTime, TxTail are in 10ms units.
+    /// Verifies the FormatParameterValue method shows correct human-readable interpretation.
+    /// </summary>
+    [Theory]
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 0, "0 (= 0ms, spec: value × 10ms)")]
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 10, "10 (= 100ms, spec: value × 10ms)")]
+    [InlineData(KissFrameBuilder.CMD_TXDELAY, 50, "50 (= 500ms, spec: value × 10ms)")]
+    [InlineData(KissFrameBuilder.CMD_SLOTTIME, 10, "10 (= 100ms, spec: value × 10ms)")]
+    [InlineData(KissFrameBuilder.CMD_TXTAIL, 30, "30 (= 300ms, spec: value × 10ms)")]
+    public void FormatParameterValue_TimeParams_ShowsMilliseconds(byte command, int value, string expected)
+    {
+        KissFrameBuilder.FormatParameterValue(command, value).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Per KISS spec: Persistence P is 0-255, real probability p = (P+1)/256.
+    /// </summary>
+    [Theory]
+    [InlineData(0, "0 (= p 0.004, spec: p = (P+1)/256)")]
+    [InlineData(63, "63 (= p 0.250, spec: p = (P+1)/256)")]       // spec default
+    [InlineData(127, "127 (= p 0.500, spec: p = (P+1)/256)")]
+    [InlineData(255, "255 (= p 1.000, spec: p = (P+1)/256)")]
+    public void FormatParameterValue_Persistence_ShowsProbability(int value, string expected)
+    {
+        KissFrameBuilder.FormatParameterValue(KissFrameBuilder.CMD_PERSISTENCE, value).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(0, "0 (= half duplex)")]
+    [InlineData(1, "1 (= full duplex)")]
+    [InlineData(255, "255 (= full duplex)")]
+    public void FormatParameterValue_FullDuplex_ShowsMode(int value, string expected)
+    {
+        KissFrameBuilder.FormatParameterValue(KissFrameBuilder.CMD_FULLDUPLEX, value).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Per KISS spec: command is in low nibble, port in high nibble of command byte.
+    /// Verifies all 5 mandatory commands + optional ones are correctly encoded across ports.
+    /// </summary>
+    [Theory]
+    [InlineData(0x01, 0, 0x01)]  // TxDelay, port 0
+    [InlineData(0x02, 0, 0x02)]  // Persistence, port 0
+    [InlineData(0x03, 0, 0x03)]  // SlotTime, port 0
+    [InlineData(0x04, 0, 0x04)]  // TxTail, port 0
+    [InlineData(0x05, 0, 0x05)]  // FullDuplex, port 0
+    [InlineData(0x01, 1, 0x11)]  // TxDelay, port 1
+    [InlineData(0x02, 2, 0x22)]  // Persistence, port 2
+    [InlineData(0x03, 4, 0x43)]  // SlotTime, port 4
+    [InlineData(0x01, 15, 0xF1)] // TxDelay, port 15 (max)
+    public void BuildParameterFrame_AllPorts_EncodesCorrectCommandByte(byte command, int port, byte expectedCmdByte)
+    {
+        var frame = KissFrameBuilder.BuildParameterFrame(command, 42, port);
+        frame.Should().Equal(FEND, expectedCmdByte, 42, FEND);
+    }
+
     [Fact]
     public void NinoModes_ContainsExpectedModes()
     {

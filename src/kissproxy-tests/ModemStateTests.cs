@@ -451,4 +451,52 @@ public class ModemStateTests
         status.CurrentModeName.Should().Be("300 AFSKPLL IL2P+CRC");
         status.BoardSwitchMode.Should().Be(0x0023);  // Raw firmware mode value
     }
+
+    [Fact]
+    public void TwoModems_BothReceiveTxTestFrame_BothHaveNinoTncStatus()
+    {
+        // Simulate two modems in a ModemStateManager, each receiving a TX Test frame
+        var manager = new ModemStateManager();
+        var state1 = manager.GetOrCreate("modem1");
+        var state2 = manager.GetOrCreate("modem2");
+
+        // Modem 1: firmware 3.44, mode 14
+        var frame1 = HexToBytes("C0 00 86 A2 84 8A 8A A0 EA 9C 72 6C 60 60 82 69 03 F0 3D 46 69 72 6D 77 61 72 65 56 72 3A 33 2E 34 34 3D 53 65 72 69 61 6C 4E 6D 62 72 3A 00 00 00 00 00 00 00 00 3D 55 70 74 69 6D 65 4D 69 6C 53 3A 30 30 30 32 30 38 45 43 3D 42 72 64 53 77 63 68 4D 6F 64 3A 30 34 30 45 30 30 32 33 3D 41 58 32 35 52 78 50 6B 74 73 3A 30 30 30 30 30 30 30 30 3D 49 4C 32 50 52 78 50 6B 74 73 3A 30 30 30 30 30 30 30 36 3D 49 4C 32 50 52 78 55 6E 43 72 3A 30 30 30 30 30 30 30 30 3D 54 78 50 6B 74 43 6F 75 6E 74 3A 30 30 30 30 30 30 30 30 3D 50 72 65 61 6D 62 6C 43 6E 74 3A 30 30 30 30 30 30 30 35 3D 4C 6F 6F 70 43 79 63 6C 65 73 3A 30 30 36 38 35 30 45 46 3D 4C 6F 73 74 41 44 43 53 6D 70 3A 30 30 30 30 30 30 30 30 C0");
+        var info1 = new FrameInfo { CommandCode = KissFrameBuilder.CMD_DATAFRAME };
+        state1.RecordFrameFromModem(frame1, info1);
+
+        // Modem 2: user-reported frame - firmware 3.43, mode 0xB0 (switch 2)
+        var frame2 = HexToBytes("C0 00 86 A2 84 8A 8A A0 EA 8E 84 6E A4 88 8E 61 03 F0 3D 46 69 72 6D 77 61 72 65 56 72 3A 33 2E 34 33 3D 53 65 72 69 61 6C 4E 6D 62 72 3A 00 00 00 00 00 00 00 00 3D 55 70 74 69 6D 65 4D 69 6C 53 3A 30 31 30 36 42 30 46 31 3D 42 72 64 53 77 63 68 4D 6F 64 3A 30 32 30 46 30 30 42 30 3D 41 58 32 35 52 78 50 6B 74 73 3A 30 30 30 30 30 30 30 30 3D 49 4C 32 50 52 78 50 6B 74 73 3A 30 30 30 30 30 31 41 43 3D 49 4C 32 50 52 78 55 6E 43 72 3A 30 30 30 30 30 30 30 30 3D 54 78 50 6B 74 43 6F 75 6E 74 3A 30 30 30 30 30 31 36 37 3D 50 72 65 61 6D 62 6C 43 6E 74 3A 30 30 30 30 30 30 31 32 3D 4C 6F 6F 70 43 79 63 6C 65 73 3A 31 41 42 35 36 34 44 38 3D 4C 6F 73 74 41 44 43 53 6D 70 3A 30 30 30 30 30 30 30 30 C0");
+        var info2 = new FrameInfo { CommandCode = KissFrameBuilder.CMD_DATAFRAME };
+        state2.RecordFrameFromModem(frame2, info2);
+
+        // Both modems should have NinoTNC status
+        state1.NinoTncStatus.Should().NotBeNull();
+        state2.NinoTncStatus.Should().NotBeNull();
+
+        // Verify snapshots include NinoTNC status
+        var snap1 = manager.GetSnapshot("modem1");
+        var snap2 = manager.GetSnapshot("modem2");
+        snap1!.NinoTncStatus.Should().NotBeNull();
+        snap1!.NinoTncStatus!.FirmwareVersion.Should().Be("3.44");
+        snap2!.NinoTncStatus.Should().NotBeNull();
+        snap2!.NinoTncStatus!.FirmwareVersion.Should().Be("3.43");
+        snap2!.NinoTncStatus!.CurrentMode.Should().Be(2);
+
+        // Verify JSON serialization includes ninoTncStatus for both
+        var jsonOptions = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false
+        };
+        var json1 = System.Text.Json.JsonSerializer.Serialize(new { id = "modem1", state = snap1 }, jsonOptions);
+        var json2 = System.Text.Json.JsonSerializer.Serialize(new { id = "modem2", state = snap2 }, jsonOptions);
+
+        json1.Should().Contain("ninoTncStatus");
+        json1.Should().Contain("firmwareVersion");
+        json2.Should().Contain("ninoTncStatus");
+        json2.Should().Contain("firmwareVersion");
+        json2.Should().Contain("3.43");
+    }
 }

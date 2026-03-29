@@ -973,6 +973,11 @@
             const card = document.querySelector(`[data-modem-id="${id}"]`);
             if (!card) return;
 
+            // Update NinoTNC status first (independent of other updates)
+            if (stats.ninoTncStatus) {
+                updateNinoTncStatus(id, stats.ninoTncStatus);
+            }
+
             // Update connection status
             const nodeStatus = card.querySelector('.node-status');
             const serialStatus = card.querySelector('.serial-status');

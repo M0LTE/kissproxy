@@ -963,10 +963,13 @@ public class KissProxy
 
             if (commandCode == KissCommandCode.DataFrame || commandCode == KissCommandCode.AckMode)
             {
-                description = await GetDescription(ax25Frame);
-                if (description != null)
+                if (mqttClient != null || logger.IsEnabled(LogLevel.Debug))
                 {
-                    await EnqueueString($"{topic}/decoded/port{portId}/", description);
+                    description = await GetDescription(ax25Frame);
+                    if (description != null)
+                    {
+                        await EnqueueString($"{topic}/decoded/port{portId}/", description);
+                    }
                 }
             }
         }

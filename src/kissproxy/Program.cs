@@ -226,15 +226,20 @@ static void LogError(string message) => Console.WriteLine($"{DateTime.UtcNow:HH:
 class ConsoleLogger : ILogger
 {
     private readonly string instanceName;
+    private readonly LogLevel minimumLevel;
     private string? scopeName;
 
-    public ConsoleLogger(string instanceName = "")
+    public ConsoleLogger(string instanceName = "", LogLevel minimumLevel = LogLevel.Information)
     {
         this.instanceName = instanceName;
+        this.minimumLevel = minimumLevel;
     }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
+        if (!IsEnabled(logLevel))
+            return;
+
         var name = scopeName ?? instanceName;
         var prefix = string.IsNullOrEmpty(name) ? "" : $"[{name}] ";
         var message = formatter(state, exception);
@@ -247,20 +252,17 @@ class ConsoleLogger : ILogger
             _ => "INFO"
         };
 
-        if (logLevel >= LogLevel.Debug)
+        if (logLevel >= LogLevel.Warning)
         {
-            if (logLevel >= LogLevel.Warning)
-            {
-                Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {levelStr}: {prefix}{message}");
-            }
-            else
-            {
-                Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {prefix}{message}");
-            }
+            Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {levelStr}: {prefix}{message}");
+        }
+        else
+        {
+            Console.WriteLine($"{DateTime.UtcNow:HH:mm:ss.ff}Z  {prefix}{message}");
         }
     }
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+    public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None && logLevel >= minimumLevel;
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
     {

@@ -106,6 +106,7 @@ public static class WebApi
             // the SSE stream, causing the browser to drop events.
             var channel = Channel.CreateUnbounded<(string id, ModemState state)>(
                 new UnboundedChannelOptions { SingleReader = true });
+            using var detailedTracking = stateManager.EnableDetailedFrameTracking();
 
             // Queue initial state for all modems
             foreach (var modem in configManager.Config.Modems)

@@ -44,6 +44,11 @@ internal class FakeSerialPort : ISerialPort
     public void DiscardInBuffer() { }
     public void Dispose() { }
     public void Open() { }
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        Thread.CurrentThread.Join();
+        return 0;
+    }
     public int ReadByte()
     {
         Thread.CurrentThread.Join();

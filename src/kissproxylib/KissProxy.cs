@@ -427,12 +427,15 @@ public class KissProxy
     /// </summary>
     private void RunSerialReader(ISerialPort serialPort, bool emitAsBase64String, CancellationToken cancellationToken)
     {
+        var readBuffer = new byte[512];
+
         while (!cancellationToken.IsCancellationRequested)
         {
             int read;
             try
             {
-                read = serialPort.ReadByte();
+                var bytesToRead = Math.Min(readBuffer.Length, Math.Max(serialPort.BytesToRead, 1));
+                read = serialPort.Read(readBuffer, 0, bytesToRead);
             }
             catch (TimeoutException)
             {
@@ -452,10 +455,10 @@ public class KissProxy
                 return;
             }
 
-            var b = (byte)read;
-
-            // Process for frame detection, stats, MQTT
-            ProcessByte(inboundBufferData, false, b, emitAsBase64String);
+            for (int i = 0; i < read; i++)
+            {
+                ProcessByte(inboundBufferData, false, readBuffer[i], emitAsBase64String);
+            }
 
             // Forward to TCP if connected
             NetworkStream? tcpStream;
@@ -470,7 +473,7 @@ public class KissProxy
             {
                 try
                 {
-                    tcpStream.WriteByte(b);
+                    tcpStream.Write(readBuffer, 0, read);
                 }
                 catch (Exception ex)
                 {
@@ -554,13 +557,14 @@ public class KissProxy
     private void RunNodeToModem(NetworkStream tcpStream, ISerialPort serialPort, bool emitAsBase64String, CancellationTokenSource cts)
     {
         List<byte> frameBuffer = [];
+        var readBuffer = new byte[512];
 
         while (!cts.Token.IsCancellationRequested)
         {
             int read;
             try
             {
-                read = tcpStream.ReadByte();
+                read = tcpStream.Read(readBuffer, 0, readBuffer.Length);
             }
             catch (IOException ex) when (ex.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut)
             {
@@ -579,41 +583,42 @@ public class KissProxy
                 return;
             }
 
-            var b = (byte)read;
-
-            // Buffer the byte for frame detection
-            bool frameComplete = BufferByteForFiltering(frameBuffer, b);
-
-            if (frameComplete && frameBuffer.Count > 0)
+            for (int i = 0; i < read; i++)
             {
-                var frame = frameBuffer.ToArray();
-                frameBuffer.Clear();
+                var b = readBuffer[i];
+                bool frameComplete = BufferByteForFiltering(frameBuffer, b);
 
-                // Check if frame should be filtered
-                if (ShouldFilterFrame(frame))
+                if (frameComplete && frameBuffer.Count > 0)
                 {
-                    logger.LogDebug("Filtered frame from node");
-                    modemState?.RecordFilteredFrame();
-                    var filtInfo = CreateFrameInfo(frame, outbound: true);
-                    if (filtInfo != null) modemState?.RecordNodeParamCommand(filtInfo, filtered: true);
-                    continue;
-                }
+                    var frame = frameBuffer.ToArray();
+                    frameBuffer.Clear();
 
-                // Forward the frame to modem (locked to prevent interleaving with config writes)
-                try
-                {
-                    WriteToSerial(serialPort, frame, 0, frame.Length);
-                    ProcessOutboundFrame(frame, emitAsBase64String);
+                    // Check if frame should be filtered
+                    if (ShouldFilterFrame(frame))
+                    {
+                        logger.LogDebug("Filtered frame from node");
+                        modemState?.RecordFilteredFrame();
+                        var filtInfo = CreateFrameInfo(frame, outbound: true, includeDetailedFields: modemState?.CaptureDetailedFrameInfo ?? false);
+                        if (filtInfo != null) modemState?.RecordNodeParamCommand(filtInfo, filtered: true);
+                        continue;
+                    }
+
+                    // Forward the frame to modem (locked to prevent interleaving with config writes)
+                    try
+                    {
+                        WriteToSerial(serialPort, frame, 0, frame.Length);
+                        ProcessOutboundFrame(frame, emitAsBase64String);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError("Writing frame to modem failed: \"{error}\"", ex.Message);
+                        return;
+                    }
                 }
-                catch (Exception ex)
+                else if (!frameComplete)
                 {
-                    logger.LogError("Writing frame to modem failed: \"{error}\"", ex.Message);
-                    return;
+                    // Still accumulating frame, don't forward yet
                 }
-            }
-            else if (!frameComplete)
-            {
-                // Still accumulating frame, don't forward yet
             }
         }
     }
@@ -670,8 +675,12 @@ public class KissProxy
     private void ProcessOutboundFrame(byte[] frame, bool emitAsBase64String)
     {
         // Record in state
-        var frameInfo = CreateFrameInfo(frame, outbound: true);
-        modemState?.RecordFrameToModem(frame, frameInfo);
+        var frameSummary = CreateFrameSummary(frame);
+        var captureDetailedFrameInfo = modemState?.CaptureDetailedFrameInfo ?? false;
+        var frameInfo = captureDetailedFrameInfo
+            ? CreateFrameInfo(frame, outbound: true, includeDetailedFields: true)
+            : null;
+        modemState?.RecordFrameToModem(frame, frameSummary, frameInfo);
 
         // Track outbound ACKMODE frames for timing
         var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
@@ -704,8 +713,10 @@ public class KissProxy
             }
         }
 
-        // Process for MQTT
-        Task.Run(async () => await ProcessFrame(outbound: true, frame, emitAsBase64String));
+        if (ShouldProcessFrame(frame))
+        {
+            Task.Run(async () => await ProcessFrame(outbound: true, frame, emitAsBase64String));
+        }
     }
 
     /// <summary>
@@ -842,40 +853,42 @@ public class KissProxy
         }
     }
 
-    private FrameInfo? CreateFrameInfo(byte[] frame, bool outbound)
+    private FrameInfo? CreateFrameInfo(byte[] frame, bool outbound, bool includeDetailedFields)
     {
+        var summary = CreateFrameSummary(frame);
+        if (!summary.HasValue)
+            return null;
+
         var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
         if (!cmdByte.HasValue)
             return null;
 
-        var (command, port) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
-
-        // Create hex and ASCII dumps
-        var (hexDump, asciiDump) = FrameInfo.CreateDumps(frame);
+        var (_, port) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
 
         var info = new FrameInfo
         {
             Timestamp = DateTime.UtcNow,
-            CommandCode = command,
-            CommandName = KissFrameBuilder.GetCommandName(command),
+            CommandCode = summary.Value.CommandCode,
+            CommandName = KissFrameBuilder.GetCommandName(summary.Value.CommandCode),
             Port = port,
-            PayloadLength = Math.Max(0, frame.Length - 3), // Subtract FEND, cmd, FEND
-            HexDump = hexDump,
-            AsciiDump = asciiDump
+            PayloadLength = Math.Max(0, frame.Length - 3) // Subtract FEND, cmd, FEND
         };
 
-        // For parameter frames, extract the value
-        if (command != KissFrameBuilder.CMD_DATAFRAME && frame.Length >= 4)
+        if (includeDetailedFields)
         {
-            int valueIdx = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
-            if (valueIdx < frame.Length - 1)
-            {
-                info.ParameterValue = frame[valueIdx];
-            }
+            var (hexDump, asciiDump) = FrameInfo.CreateDumps(frame);
+            info.HexDump = hexDump;
+            info.AsciiDump = asciiDump;
+        }
+
+        // For parameter frames, extract the value
+        if (summary.Value.ParameterValue.HasValue)
+        {
+            info.ParameterValue = summary.Value.ParameterValue.Value;
         }
 
         // For data frames, extract source callsign from AX.25 header
-        if (command == KissFrameBuilder.CMD_DATAFRAME)
+        if (includeDetailedFields && summary.Value.IsDataFrame)
         {
             int payloadStart = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
             // AX.25 layout: dest (7 bytes) then src (7 bytes)
@@ -909,8 +922,11 @@ public class KissProxy
             // Record in state
             if (!outbound && modemState != null)
             {
-                var frameInfo = CreateFrameInfo(frame, outbound: false);
-                modemState.RecordFrameFromModem(frame, frameInfo);
+                var frameSummary = CreateFrameSummary(frame);
+                var frameInfo = modemState.CaptureDetailedFrameInfo
+                    ? CreateFrameInfo(frame, outbound: false, includeDetailedFields: true)
+                    : null;
+                modemState.RecordFrameFromModem(frame, frameSummary, frameInfo);
             }
 
             // Check for ACKMODE ACK from modem (inbound)
@@ -924,8 +940,52 @@ public class KissProxy
                 }
             }
 
-            Task.Run(async () => await ProcessFrame(outbound, frame, emitAsBase64String));
+            if (ShouldProcessFrame(frame))
+            {
+                Task.Run(async () => await ProcessFrame(outbound, frame, emitAsBase64String));
+            }
         });
+    }
+
+    private bool ShouldProcessFrame(byte[] frame)
+    {
+        if (mqttClient != null || logger.IsEnabled(LogLevel.Debug))
+            return true;
+
+        if (!logger.IsEnabled(LogLevel.Information))
+            return false;
+
+        var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+        if (!cmdByte.HasValue)
+            return false;
+
+        var (command, _) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+        return command == KissFrameBuilder.CMD_PERSISTENCE
+            || command == KissFrameBuilder.CMD_SLOTTIME
+            || command == KissFrameBuilder.CMD_TXDELAY
+            || command == KissFrameBuilder.CMD_TXTAIL
+            || command == KissFrameBuilder.CMD_FULLDUPLEX;
+    }
+
+    private static FrameSummary? CreateFrameSummary(byte[] frame)
+    {
+        var cmdByte = KissFrameBuilder.GetCommandByteFromFrame(frame);
+        if (!cmdByte.HasValue)
+            return null;
+
+        var (command, _) = KissFrameBuilder.ParseCommandByte(cmdByte.Value);
+        int? parameterValue = null;
+
+        if (command != KissFrameBuilder.CMD_DATAFRAME && frame.Length >= 4)
+        {
+            int valueIdx = frame[0] == KissFrameBuilder.FEND ? 2 : 1;
+            if (valueIdx < frame.Length - 1)
+            {
+                parameterValue = frame[valueIdx];
+            }
+        }
+
+        return new FrameSummary(command, parameterValue);
     }
 
     private static string LastDelimitation(string topic, char delimiter)

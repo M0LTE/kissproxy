@@ -62,6 +62,30 @@ public class SimulatedTnc : ISerialPort
         }
     }
 
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        if (count <= 0)
+            return 0;
+
+        try
+        {
+            buffer[offset] = _fromTnc.Take(_cts.Token);
+            int read = 1;
+
+            while (read < count && _fromTnc.TryTake(out var nextByte))
+            {
+                buffer[offset + read] = nextByte;
+                read++;
+            }
+
+            return read;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException("Read cancelled");
+        }
+    }
+
     public void Write(byte[] buffer, int offset, int count)
     {
         for (int i = offset; i < offset + count; i++)

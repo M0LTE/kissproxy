@@ -265,6 +265,11 @@ public class FrameInfo
 /// </summary>
 public record KissParamStatus(int Value, bool Filtered);
 
+internal readonly record struct FrameSummary(byte CommandCode, int? ParameterValue)
+{
+    public bool IsDataFrame => CommandCode == KissFrameBuilder.CMD_DATAFRAME;
+}
+
 /// <summary>
 /// Runtime state for a single modem, including live statistics.
 /// </summary>
@@ -273,6 +278,7 @@ public class ModemState
     public string Id { get; set; } = "";
     public bool NodeConnected { get; set; }
     public bool SerialOpen { get; set; }
+    internal bool CaptureDetailedFrameInfo { get; set; }
 
     // Live timing
     public DateTime? LastFrameToModem { get; set; }
@@ -322,6 +328,9 @@ public class ModemState
     /// Records a frame sent to the modem.
     /// </summary>
     public void RecordFrameToModem(byte[] frame, FrameInfo? info = null)
+        => RecordFrameToModem(frame, summary: null, info);
+
+    internal void RecordFrameToModem(byte[] frame, FrameSummary? summary, FrameInfo? info)
     {
         lock (lockObj)
         {
@@ -329,21 +338,25 @@ public class ModemState
             BytesToModem += frame.Length;
             LastFrameToModem = DateTime.UtcNow;
 
-            if (info != null)
+            if (summary.HasValue)
             {
-                LastFrameToModemInfo = info;
-
-                if (info.CommandCode == KissFrameBuilder.CMD_DATAFRAME)
+                if (summary.Value.IsDataFrame)
                 {
                     DataFramesToModem++;
                     LastDataFrameToModem = DateTime.UtcNow;
                 }
 
-                // Update current parameter values
-                UpdateCurrentParameters(info);
+                UpdateCurrentParameters(summary.Value);
+                RecordNodeParamCommand(summary.Value, filtered: false);
+            }
 
-                // Track pass/filter status for node param commands
-                RecordNodeParamCommand(info, filtered: false);
+            if (info != null)
+            {
+                LastFrameToModemInfo = info;
+            }
+            else
+            {
+                LastFrameToModemInfo = null;
             }
         }
         OnStateChanged?.Invoke();
@@ -353,6 +366,9 @@ public class ModemState
     /// Records a frame received from the modem.
     /// </summary>
     public void RecordFrameFromModem(byte[] frame, FrameInfo? info = null)
+        => RecordFrameFromModem(frame, summary: null, info);
+
+    internal void RecordFrameFromModem(byte[] frame, FrameSummary? summary, FrameInfo? info)
     {
         lock (lockObj)
         {
@@ -360,25 +376,33 @@ public class ModemState
             BytesFromModem += frame.Length;
             LastFrameFromModem = DateTime.UtcNow;
 
-            if (info != null)
+            if (summary.HasValue)
             {
-                LastFrameFromModemInfo = info;
-
-                if (info.CommandCode == KissFrameBuilder.CMD_DATAFRAME)
+                if (summary.Value.IsDataFrame)
                 {
                     DataFramesFromModem++;
                     LastDataFrameFromModem = DateTime.UtcNow;
 
-                    // Check if this is a NinoTNC TX Test frame
-                    var tncStatus = NinoTncStatus.TryParse(frame);
-                    if (tncStatus != null)
+                    if (CaptureDetailedFrameInfo)
                     {
-                        NinoTncStatus = tncStatus;
+                        var tncStatus = NinoTncStatus.TryParse(frame);
+                        if (tncStatus != null)
+                        {
+                            NinoTncStatus = tncStatus;
+                        }
                     }
                 }
 
-                // Update current parameter values
-                UpdateCurrentParameters(info);
+                UpdateCurrentParameters(summary.Value);
+            }
+
+            if (info != null)
+            {
+                LastFrameFromModemInfo = info;
+            }
+            else
+            {
+                LastFrameFromModemInfo = null;
             }
         }
         OnStateChanged?.Invoke();
@@ -439,14 +463,19 @@ public class ModemState
     /// </summary>
     public void RecordNodeParamCommand(FrameInfo info, bool filtered)
     {
-        if (!info.ParameterValue.HasValue)
+        RecordNodeParamCommand(new FrameSummary(info.CommandCode, info.ParameterValue), filtered);
+    }
+
+    internal void RecordNodeParamCommand(FrameSummary summary, bool filtered)
+    {
+        if (!summary.ParameterValue.HasValue)
             return;
 
-        var status = new KissParamStatus(info.ParameterValue.Value, filtered);
+        var status = new KissParamStatus(summary.ParameterValue.Value, filtered);
 
         lock (lockObj)
         {
-            switch (info.CommandCode)
+            switch (summary.CommandCode)
             {
                 case KissFrameBuilder.CMD_TXDELAY:     LastNodeTxDelay     = status; break;
                 case KissFrameBuilder.CMD_PERSISTENCE: LastNodePersistence = status; break;
@@ -459,29 +488,33 @@ public class ModemState
 
     private void UpdateCurrentParameters(FrameInfo info)
     {
-        if (!info.ParameterValue.HasValue)
+        UpdateCurrentParameters(new FrameSummary(info.CommandCode, info.ParameterValue));
+    }
+
+    private void UpdateCurrentParameters(FrameSummary summary)
+    {
+        if (!summary.ParameterValue.HasValue)
             return;
 
-        switch (info.CommandCode)
+        switch (summary.CommandCode)
         {
             case KissFrameBuilder.CMD_TXDELAY:
-                CurrentTxDelay = info.ParameterValue;
+                CurrentTxDelay = summary.ParameterValue;
                 break;
             case KissFrameBuilder.CMD_PERSISTENCE:
-                CurrentPersistence = info.ParameterValue;
+                CurrentPersistence = summary.ParameterValue;
                 break;
             case KissFrameBuilder.CMD_SLOTTIME:
-                CurrentSlotTime = info.ParameterValue;
+                CurrentSlotTime = summary.ParameterValue;
                 break;
             case KissFrameBuilder.CMD_TXTAIL:
-                CurrentTxTail = info.ParameterValue;
+                CurrentTxTail = summary.ParameterValue;
                 break;
             case KissFrameBuilder.CMD_FULLDUPLEX:
-                CurrentFullDuplex = info.ParameterValue != 0;
+                CurrentFullDuplex = summary.ParameterValue != 0;
                 break;
             case KissFrameBuilder.CMD_SETHW:
-                // For NinoTNC, mode is value & 0x0F (strip the persist bit)
-                CurrentNinoMode = info.ParameterValue.Value & 0x0F;
+                CurrentNinoMode = summary.ParameterValue.Value & 0x0F;
                 break;
         }
     }
@@ -557,6 +590,7 @@ public class ModemState
 public class ModemStateManager
 {
     private readonly ConcurrentDictionary<string, ModemState> states = new();
+    private int detailedTrackingSubscribers;
 
     /// <summary>
     /// Event raised when any modem state changes. Provides the modem ID and snapshot.
@@ -575,10 +609,21 @@ public class ModemStateManager
     {
         return states.GetOrAdd(id, key =>
         {
-            var state = new ModemState { Id = key };
+            var state = new ModemState
+            {
+                Id = key,
+                CaptureDetailedFrameInfo = Volatile.Read(ref detailedTrackingSubscribers) > 0
+            };
             state.OnStateChanged = () => NotifyStateChanged(id, state);
             return state;
         });
+    }
+
+    public IDisposable EnableDetailedFrameTracking()
+    {
+        Interlocked.Increment(ref detailedTrackingSubscribers);
+        SetDetailedFrameTracking(enabled: true);
+        return new DetailedFrameTrackingLease(this);
     }
 
     /// <summary>
@@ -587,6 +632,24 @@ public class ModemStateManager
     private void NotifyStateChanged(string id, ModemState state)
     {
         StateChanged?.Invoke(id, state.Snapshot());
+    }
+
+    private void DisableDetailedFrameTracking()
+    {
+        var remainingSubscribers = Interlocked.Decrement(ref detailedTrackingSubscribers);
+        if (remainingSubscribers <= 0)
+        {
+            Interlocked.Exchange(ref detailedTrackingSubscribers, 0);
+            SetDetailedFrameTracking(enabled: false);
+        }
+    }
+
+    private void SetDetailedFrameTracking(bool enabled)
+    {
+        foreach (var state in states.Values)
+        {
+            state.CaptureDetailedFrameInfo = enabled;
+        }
     }
 
     /// <summary>
@@ -615,5 +678,18 @@ public class ModemStateManager
     public bool Remove(string id)
     {
         return states.TryRemove(id, out _);
+    }
+
+    private sealed class DetailedFrameTrackingLease(ModemStateManager manager) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+            {
+                manager.DisableDetailedFrameTracking();
+            }
+        }
     }
 }
